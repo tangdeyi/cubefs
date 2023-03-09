@@ -8,11 +8,7 @@ BuildDependsLibPath=${BuildPath}/lib
 BuildDependsIncludePath=${BuildPath}/include
 VendorPath=${RootPath}/vendor
 DependsPath=${RootPath}/depends
-use_clang=$(echo ${CC} | grep "clang" | grep -v "grep")
-cgo_ldflags="-L${BuildDependsLibPath} -lrocksdb -lz -lbz2 -lsnappy -llz4 -lzstd -lstdc++"
-if [ "${use_clang}" != "" ]; then 
-    cgo_ldflags="-L${BuildDependsLibPath} -lrocksdb -lz -lbz2 -lsnappy -llz4 -lzstd -lc++"
-fi
+cgo_ldflags="-L${BuildDependsLibPath} -lrocksdb -lz -lbz2 -lsnappy -llz4 -lzstd"
 cgo_cflags="-I${BuildDependsIncludePath}"
 MODFLAGS=""
 gomod=${2:-"on"}
@@ -50,18 +46,20 @@ Version=$(git describe --abbrev=0 --tags 2>/dev/null)
 BranchName=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
 CommitID=$(git rev-parse HEAD 2>/dev/null)
 BuildTime=$(date +%Y-%m-%d\ %H:%M)
-LDFlags="-X 'github.com/cubefs/cubefs/proto.Version=${Version}' \
-    -X 'github.com/cubefs/cubefs/proto.CommitID=${CommitID}' \
-    -X 'github.com/cubefs/cubefs/proto.BranchName=${BranchName}' \
-    -X 'github.com/cubefs/cubefs/proto.BuildTime=${BuildTime}' \
-    -X 'github.com/cubefs/cubefs/blobstore/util/version.version=${BranchName}/${CommitID}' \
-    -w -s"
+LDFlags="-X github.com/cubefs/cubefs/proto.Version=${Version} \
+    -X github.com/cubefs/cubefs/proto.CommitID=${CommitID} \
+    -X github.com/cubefs/cubefs/proto.BranchName=${BranchName} \
+    -X 'github.com/cubefs/cubefs/proto.BuildTime=${BuildTime}'"
 
 NPROC=$(nproc 2>/dev/null)
 if [ -e /sys/fs/cgroup/cpu ] ; then
     NPROC=4
 fi
 NPROC=${NPROC:-"1"}
+
+GCC_LIBRARY_PATH="/lib /lib64 /usr/lib /usr/lib64 /usr/local/lib /usr/local/lib64"
+#cgo_cflags=""
+#cgo_ldflags="-lstdc++ -lm"
 
 case $(uname -s | tr 'A-Z' 'a-z') in
     "linux"|"darwin")
@@ -104,9 +102,6 @@ build_bzip2() {
 
     if [ ! -d ${BuildOutPath}/bzip2-bzip2-${BZIP2_VER} ]; then
         tar -zxf ${DependsPath}/bzip2-bzip2-${BZIP2_VER}.tar.gz -C ${BuildOutPath}
-        if [ "${use_clang}" != "" ]; then
-            sed -i '18d' ${BuildOutPath}/bzip2-bzip2-${BZIP2_VER}/Makefile
-        fi
     fi
 
     echo "build bzip2..."
@@ -186,9 +181,38 @@ build_snappy() {
 }
 
 build_rocksdb() {
+<<<<<<< HEAD
     ROCKSDB_VER=6.3.6
     if [ -f "${BuildDependsLibPath}/librocksdb.a" ]; then
         return 0
+=======
+    RocksdbSrcPath=${DependsPath}/rocksdb-5.9.2
+    RocksdbBuildPath=${BuildOutPath}/rocksdb
+    found=$(find ${RocksdbBuildPath} -name librocksdb.a 2>/dev/null | wc -l)
+    if [ ${found} -eq 0 ] ; then
+        if [ ! -d ${RocksdbBuildPath} ] ; then
+            mkdir -p ${RocksdbBuildPath}
+            cp -rf ${RocksdbSrcPath}/* ${RocksdbBuildPath}
+        fi
+
+        pushd ${RocksdbBuildPath} >/dev/null
+
+        [ "-$LUA_PATH" != "-" ]  && unset LUA_PATH
+        MAJOR=$(echo __GNUC__ | $(which gcc) -E -xc - | tail -n 1)
+        if [ ${MAJOR} -ge 12 ] ; then
+          CXXFLAGS='-Wno-error=deprecated-copy -Wno-error=class-memaccess -Wno-error=pessimizing-move -Wno-error=range-loop-construct' \
+        make -j ${NPROC} static_lib  && echo "build rocksdb success" || {  echo "build rocksdb failed" ; exit 1; }
+        elif [ ${MAJOR} -ge 10 ] ; then
+          CXXFLAGS='-Wno-error=deprecated-copy -Wno-error=class-memaccess -Wno-error=pessimizing-move' \
+		make -j ${NPROC} static_lib  && echo "build rocksdb success" || {  echo "build rocksdb failed" ; exit 1; }
+        elif [ ${MAJOR} -ge 8 ] ; then
+	  CXXFLAGS='-Wno-error=class-memaccess' \
+		      make -j ${NPROC} static_lib  && echo "build rocksdb success" || {  echo "build rocksdb failed" ; exit 1; }
+	else
+		      make -j ${NPROC} static_lib  && echo "build rocksdb success" || {  echo "build rocksdb failed" ; exit 1; }
+	fi
+        popd >/dev/null
+>>>>>>> 9bb751211 (fix(build): fix build in gcc 12)
     fi
 
     if [ ! -d ${BuildOutPath}/rocksdb-${ROCKSDB_VER} ]; then
@@ -197,21 +221,16 @@ build_rocksdb() {
         sed -i '1069s/newf/\&newf/' rocksdb-${ROCKSDB_VER}/db/db_impl/db_impl_compaction_flush.cc
         sed -i '1161s/newf/\&newf/' rocksdb-${ROCKSDB_VER}/db/db_impl/db_impl_compaction_flush.cc
         sed -i '412s/pair/\&pair/' rocksdb-${ROCKSDB_VER}/options/options_parser.cc
-        sed -i '63s/std::mutex/mutable std::mutex/' rocksdb-${ROCKSDB_VER}/util/channel.h
         popd
     fi
 
     echo "build rocksdb..."
     pushd ${BuildOutPath}/rocksdb-${ROCKSDB_VER}
-    if [ "${use_clang}" != "" ]; then
-        FLAGS="-Wno-error=deprecated-copy -Wno-error=pessimizing-move -Wno-error=shadow -Wno-error=unused-but-set-variable"
-    else
-        CCMAJOR=`gcc -dumpversion | awk -F. '{print $1}'`
-        if [ ${CCMAJOR} -ge 9 ]; then
-            FLAGS="-Wno-error=deprecated-copy -Wno-error=pessimizing-move"
-        fi
+    CCMAJOR=`gcc -dumpversion | awk -F. '{print $1}'`
+    if [ ${CCMAJOR} -ge 9 ]; then
+        FLAGS="-Wno-error=deprecated-copy -Wno-error=pessimizing-move"
     fi
-    PORTABLE=1 make EXTRA_CXXFLAGS="-fPIC ${FLAGS} -DZLIB -DBZIP2 -DSNAPPY -DLZ4 -DZSTD -I${BuildDependsIncludePath}" static_lib
+    MAKECMDGOALS=static_lib make EXTRA_CXXFLAGS="-fPIC ${FLAGS} -I${BuildDependsIncludePath}" static_lib
     if [ $? -ne 0 ]; then
         exit 1
     fi
@@ -250,10 +269,9 @@ pre_build() {
 
 run_test() {
     pushd $SrcPath >/dev/null
-    export JENKINS_TEST=1
-    ulimit -n 65536
     echo -n "${TPATH}"
 #    go test $MODFLAGS -ldflags "${LDFlags}" -cover ./master
+
     go test -cover -v -coverprofile=cover.output $(go list ./... | grep -v depends | grep -v master) | tee cubefs_unittest.output
     ret=$?
     popd >/dev/null
@@ -262,10 +280,8 @@ run_test() {
 
 run_test_cover() {
     pushd $SrcPath >/dev/null
-    export JENKINS_TEST=1
-    ulimit -n 65536
     echo -n "${TPATH}"
-    go test -trimpath -covermode=count --coverprofile coverage.txt $(go list ./... | grep -v depends | grep -v master)
+    go test -trimpath -covermode=count --coverprofile coverage.txt $(go list ./... | grep -v depends)
     ret=$?
     popd >/dev/null
     exit $ret
@@ -274,52 +290,48 @@ run_test_cover() {
 build_server() {
     pushd $SrcPath >/dev/null
     echo -n "build cfs-server   "
-    CGO_ENABLED=1 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -o ${BuildBinPath}/cfs-server ${SrcPath}/cmd/*.go && echo "success" || echo "failed"
+    CGO_ENABLED=1 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags "${LDFlags}" -o ${BuildBinPath}/cfs-server ${SrcPath}/cmd/*.go && echo "success" || echo "failed"
     popd >/dev/null
 }
 
 build_clustermgr() {
-    CGO_ENABLED=1 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -o ${BuildBinPath}/blobstore ${SrcPath}/blobstore/cmd/clustermgr
+    CGO_ENABLED=1 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags='-w -s' -o ${BuildBinPath}/blobstore ${SrcPath}/blobstore/cmd/clustermgr
 }
 
 build_blobnode() {
-    CGO_ENABLED=1 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -o ${BuildBinPath}/blobstore ${SrcPath}/blobstore/cmd/blobnode
+    CGO_ENABLED=1 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags='-w -s' -o ${BuildBinPath}/blobstore ${SrcPath}/blobstore/cmd/blobnode
 }
 
 build_access() {
-    CGO_ENABLED=0 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -o ${BuildBinPath}/blobstore ${SrcPath}/blobstore/cmd/access
+    CGO_ENABLED=0 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags='-w -s' -o ${BuildBinPath}/blobstore ${SrcPath}/blobstore/cmd/access
 }
 
 build_scheduler() {
-    CGO_ENABLED=0 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -o ${BuildBinPath}/blobstore ${SrcPath}/blobstore/cmd/scheduler
-}
-
-build_proxy() {
-    CGO_ENABLED=0 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -o ${BuildBinPath}/blobstore ${SrcPath}/blobstore/cmd/proxy
+    CGO_ENABLED=0 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags='-w -s' -o ${BuildBinPath}/blobstore ${SrcPath}/blobstore/cmd/scheduler
 }
 
 build_blobstore_cli() {
-    CGO_ENABLED=1 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -o ${BuildBinPath}/blobstore/blobstore-cli ${SrcPath}/blobstore/cli/cli
+    CGO_ENABLED=1 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags='-w -s' -o ${BuildBinPath}/blobstore ${SrcPath}/blobstore/cli/cli
 }
 
 build_blobstore() {
     pushd $SrcPath >/dev/null
     echo -n "build blobstore    "
-    build_clustermgr && build_blobnode && build_access && build_scheduler && build_proxy && build_blobstore_cli && echo "success" || echo "failed"
+    build_clustermgr && build_blobnode && build_access && build_scheduler && build_blobstore_cli && echo "success" || echo "failed"
     popd >/dev/null
 }
 
 build_client() {
     pushd $SrcPath >/dev/null
     echo -n "build cfs-client   "
-    CGO_ENABLED=0 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -o ${BuildBinPath}/cfs-client ${SrcPath}/client/*.go  && echo "success" || echo "failed"
+    CGO_ENABLED=0 go build ${MODFLAGS} -ldflags "${LDFlags}" -o ${BuildBinPath}/cfs-client ${SrcPath}/client/*.go  && echo "success" || echo "failed"
     popd >/dev/null
 }
 
 build_authtool() {
     pushd $SrcPath >/dev/null
     echo -n "build cfs-authtool "
-    CGO_ENABLED=0 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -o ${BuildBinPath}/cfs-authtool ${SrcPath}/authtool/*.go  && echo "success" || echo "failed"
+    CGO_ENABLED=0 go build ${MODFLAGS} -ldflags "${LDFlags}" -o ${BuildBinPath}/cfs-authtool ${SrcPath}/authtool/*.go  && echo "success" || echo "failed"
     popd >/dev/null
 }
 
@@ -327,7 +339,7 @@ build_cli() {
     #cli need gorocksdb too
     pushd $SrcPath >/dev/null
     echo -n "build cfs-cli      "
-    CGO_ENABLED=1 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -o ${BuildBinPath}/cfs-cli ${SrcPath}/cli/*.go  && echo "success" || echo "failed"
+    CGO_ENABLED=1 go build ${MODFLAGS} -ldflags "${LDFlags}" -o ${BuildBinPath}/cfs-cli ${SrcPath}/cli/*.go  && echo "success" || echo "failed"
     #sh cli/build.sh ${BuildBinPath}/cfs-cli && echo "success" || echo "failed"
     popd >/dev/null
 }
@@ -335,7 +347,7 @@ build_cli() {
 build_fsck() {
     pushd $SrcPath >/dev/null
     echo -n "build cfs-fsck      "
-    CGO_ENABLED=0 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -o ${BuildBinPath}/cfs-fsck ${SrcPath}/fsck/*.go  && echo "success" || echo "failed"
+    CGO_ENABLED=0 go build ${MODFLAGS} -ldflags "${LDFlags}" -o ${BuildBinPath}/cfs-fsck ${SrcPath}/fsck/*.go  && echo "success" || echo "failed"
     popd >/dev/null
 }
 
@@ -351,7 +363,7 @@ build_libsdk() {
     esac
     pushd $SrcPath >/dev/null
     echo -n "build libsdk: libcfs.so       "
-    CGO_ENABLED=1 go build $MODFLAGS -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -buildmode c-shared -o ${TargetFile} ${SrcPath}/libsdk/*.go && echo "success" || echo "failed"
+    CGO_ENABLED=1 go build $MODFLAGS -ldflags "${LDFlags}" -buildmode c-shared -o ${TargetFile} ${SrcPath}/libsdk/*.go && echo "success" || echo "failed"
     popd >/dev/null
 
     pushd $SrcPath/java >/dev/null
@@ -366,20 +378,20 @@ build_libsdk() {
 build_fdstore() {
     pushd $SrcPath >/dev/null
     echo -n "build fdstore "
-    CGO_ENABLED=0 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -o ${BuildBinPath}/fdstore ${SrcPath}/fdstore/*.go  && echo "success" || echo "failed"
+    CGO_ENABLED=0 go build ${MODFLAGS} -ldflags "${LDFlags}" -o ${BuildBinPath}/fdstore ${SrcPath}/fdstore/*.go  && echo "success" || echo "failed"
     popd >/dev/null
 }
 
 build_preload() {
     pushd $SrcPath >/dev/null
     echo -n "build cfs-preload   "
-    CGO_ENABLED=0 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -o ${BuildBinPath}/cfs-preload ${SrcPath}/preload/*.go && echo "success" || echo "failed"
+    CGO_ENABLED=0 go build ${MODFLAGS} -ldflags "${LDFlags}" -o ${BuildBinPath}/cfs-preload ${SrcPath}/preload/*.go && echo "success" || echo "failed"
 }
 
 build_bcache(){
     pushd $SrcPath >/dev/null
     echo -n "build cfs-blockcache      "
-    CGO_ENABLED=0 go build ${MODFLAGS} -gcflags=all=-trimpath=${SrcPath} -asmflags=all=-trimpath=${SrcPath} -ldflags="${LDFlags}" -o ${BuildBinPath}/cfs-bcache ${SrcPath}/blockcache/*.go  && echo "success" || echo "failed"
+    CGO_ENABLED=0 go build ${MODFLAGS} -ldflags "${LDFlags}" -o ${BuildBinPath}/cfs-bcache ${SrcPath}/blockcache/*.go  && echo "success" || echo "failed"
     popd >/dev/null
 }
 
@@ -395,14 +407,6 @@ dist_clean() {
 }
 
 cmd=${1:-"all"}
-
-if [ "${cmd}" == "dist_clean" ]; then
-    dist_clean
-    exit 0
-elif [ "${cmd}" == "clean" ]; then
-    clean
-    exit 0
-fi
 
 pre_build
 
@@ -449,6 +453,12 @@ case "$cmd" in
         ;;
     "bcache")
         build_bcache
+        ;;
+    "clean")
+        clean
+        ;;
+    "dist_clean")
+        dist_clean
         ;;
     *)
         ;;
