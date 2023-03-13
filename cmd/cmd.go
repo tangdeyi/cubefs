@@ -35,6 +35,7 @@ import (
 	"github.com/cubefs/cubefs/console"
 	"github.com/cubefs/cubefs/proto"
 
+	"github.com/cubefs/cubefs/apinode"
 	"github.com/cubefs/cubefs/objectnode"
 
 	"github.com/jacobsa/daemonize"
@@ -60,21 +61,37 @@ const (
 )
 
 const (
-	RoleMaster  = "master"
-	RoleMeta    = "metanode"
-	RoleData    = "datanode"
-	RoleAuth    = "authnode"
-	RoleObject  = "objectnode"
-	RoleConsole = "console"
+	RoleMaster    = "master"
+	RoleMeta      = "metanode"
+	RoleData      = "datanode"
+	RoleAuth      = "authnode"
+	RoleObject    = "objectnode"
+	RoleConsole   = "console"
+	RoleMaster    = "master"
+	RoleMeta      = "metanode"
+	RoleData      = "datanode"
+	RoleAuth      = "authnode"
+	RoleObject    = "objectnode"
+	RoleConsole   = "console"
+	RoleLifeCycle = "lcnode"
+	RoleAPI       = "apinode" // TODO, instead of objectnode
 )
 
 const (
-	ModuleMaster  = "master"
-	ModuleMeta    = "metaNode"
-	ModuleData    = "dataNode"
-	ModuleAuth    = "authNode"
-	ModuleObject  = "objectNode"
-	ModuleConsole = "console"
+	ModuleMaster    = "master"
+	ModuleMeta      = "metaNode"
+	ModuleData      = "dataNode"
+	ModuleAuth      = "authNode"
+	ModuleObject    = "objectNode"
+	ModuleConsole   = "console"
+	ModuleMaster    = "master"
+	ModuleMeta      = "metaNode"
+	ModuleData      = "dataNode"
+	ModuleAuth      = "authNode"
+	ModuleObject    = "objectNode"
+	ModuleConsole   = "console"
+	ModuleAPI       = "apiNode"
+	ModuleLifeCycle = "lcnode"
 )
 
 const (
@@ -188,6 +205,9 @@ func main() {
 	case RoleObject:
 		server = objectnode.NewServer()
 		module = ModuleObject
+	case RoleAPI:
+		server = apinode.NewServer()
+		module = ModuleAPI
 	case RoleConsole:
 		server = console.NewServer()
 		module = ModuleConsole
@@ -267,7 +287,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	//for multi-cpu scheduling
+	// for multi-cpu scheduling
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	if err = ump.InitUmp(role, umpDatadir); err != nil {
 		log.LogFlush()
