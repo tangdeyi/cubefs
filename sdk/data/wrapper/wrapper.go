@@ -125,6 +125,11 @@ func NewDataPartitionWrapper(clientInfo SimpleClientInfo, volName string, master
 	return
 }
 
+func (w *Wrapper) UpdateMasterAddr(addr string) {
+	w.masters = strings.Split(addr, ",")
+	w.mc = masterSDK.NewMasterClientFromString(addr, false)
+}
+
 func (w *Wrapper) Stop() {
 	w.stopOnce.Do(func() {
 		close(w.stopC)
