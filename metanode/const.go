@@ -178,6 +178,10 @@ const (
 	opFSMCreateLinkInodeOnce = 67
 )
 
+const (
+	opCreateDentryEx = 10001
+)
+
 var (
 	exporterKey string
 )

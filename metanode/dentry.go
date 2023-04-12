@@ -240,6 +240,13 @@ func (td *TxUpdateDentry) Unmarshal(raw []byte) (err error) {
 	return
 }
 
+type DentryEx struct {
+	*Dentry
+	OldIno uint64
+}
+
+// todo(leon chang), buffer need alloc first before and write directly consider the space and performance
+
 // Marshal marshals a dentry into a byte array.
 func (d *Dentry) Marshal() (result []byte, err error) {
 	keyBytes := d.MarshalKey()
@@ -256,6 +263,7 @@ func (d *Dentry) Marshal() (result []byte, err error) {
 	}
 	if err = binary.Write(buff, binary.BigEndian, valLen); err != nil {
 
+		return
 	}
 	if _, err = buff.Write(valBytes); err != nil {
 		return
