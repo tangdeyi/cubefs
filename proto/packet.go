@@ -196,6 +196,7 @@ const (
 	OpMetaBatchSetXAttr      uint8 = 0xD2
 	OpMetaGetAllXAttr        uint8 = 0xD3
 
+	OpMetaSetInodeLock uint8 = 0xD4
 	//transaction error
 	OpTxInodeInfoNotExistErr  uint8 = 0xE0
 	OpTxConflictErr           uint8 = 0xE1
