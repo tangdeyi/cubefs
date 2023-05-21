@@ -343,6 +343,7 @@ type UpdateDentryRequest struct {
 	ParentID    uint64 `json:"pino"`
 	Name        string `json:"name"`
 	Inode       uint64 `json:"ino"` // new inode number
+	OldInode    uint64 `json:"oldino"`
 }
 
 // UpdateDentryResponse defines the response to the request of updating a dentry.
