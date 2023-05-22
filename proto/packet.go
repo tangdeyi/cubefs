@@ -338,6 +338,8 @@ func (p *Packet) GetOpMsg() (m string) {
 		m = "OpMetaCreateDentry"
 	case OpMetaDeleteDentry:
 		m = "OpMetaDeleteDentry"
+	case OpMetaBatchDeleteDentry:
+		m = "OpMetaBatchDeleteDentry"
 	case OpMetaOpen:
 		m = "OpMetaOpen"
 	case OpMetaReleaseOpen:
