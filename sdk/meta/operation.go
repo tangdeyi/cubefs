@@ -578,6 +578,11 @@ func (mw *MetaWrapper) dcreateEx(mp *MetaPartition, parentID uint64, name string
 		return statusExist, nil
 	}
 
+	ver := uint64(0)
+	if mw.Client != nil {
+		ver = mw.Client.GetLatestVer()
+	}
+
 	req := &proto.CreateDentryRequest{
 		VolName:     mw.volname,
 		PartitionID: mp.PartitionID,
@@ -587,7 +592,7 @@ func (mw *MetaWrapper) dcreateEx(mp *MetaPartition, parentID uint64, name string
 		Mode:        mode,
 		QuotaIds:    quotaIds,
 		OldIno:      oldIno,
-		VerSeq:      mw.Client.GetLatestVer(),
+		VerSeq:      ver,
 	}
 
 	packet := proto.NewPacketReqID()
