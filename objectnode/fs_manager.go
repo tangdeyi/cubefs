@@ -31,6 +31,13 @@ const (
 	volumeLoaderNum                = 4
 )
 
+type VolumeMgrAPI interface {
+	Volume(volName string) (*Volume, error)
+	VolumeWithoutBlacklist(volName string) (*Volume, error)
+	Release(volName string)
+	Close()
+}
+
 type VolumeLoader struct {
 	masters    []string
 	store      Store              // Storage for ACP management
@@ -41,6 +48,18 @@ type VolumeLoader struct {
 	closeOnce  sync.Once
 	closeCh    chan struct{}
 	metaStrict bool
+}
+
+func NewVolumeLoader(masters []string, store Store, strict bool) *VolumeLoader {
+	loader := &VolumeLoader{
+		masters:    masters,
+		store:      store,
+		volumes:    make(map[string]*Volume),
+		closeCh:    make(chan struct{}),
+		metaStrict: strict,
+	}
+	go loader.blacklistCleanup()
+	return loader
 }
 
 func (loader *VolumeLoader) blacklistCleanup() {
@@ -60,21 +79,6 @@ func (loader *VolumeLoader) blacklistCleanup() {
 			return true
 		})
 		t.Reset(volumeBlacklistCleanupInterval)
-	}
-}
-
-func (loader *VolumeLoader) Release(volName string) {
-	loader.volMu.Lock()
-	vol, has := loader.volumes[volName]
-	if has {
-		delete(loader.volumes, volName)
-		log.LogDebugf("Release: release volume: volume(%v)", volName)
-	}
-	loader.volMu.Unlock()
-	if has && vol != nil {
-		if closeErr := vol.Close(); closeErr != nil {
-			log.LogErrorf("Release: close volume fail: volume(%v) err(%v)", volName, closeErr)
-		}
 	}
 }
 
@@ -144,9 +148,7 @@ func (loader *VolumeLoader) loadVolumeWithoutBlacklist(volName string) (*Volume,
 		loader.volumes[volName] = volume
 		loader.volMu.Unlock()
 		release()
-
 	}
-
 	return volume, nil
 }
 
@@ -218,7 +220,21 @@ func (loader *VolumeLoader) loadVolume(volName string) (*Volume, error) {
 	return volume, nil
 }
 
-// Release all
+func (loader *VolumeLoader) Release(volName string) {
+	loader.volMu.Lock()
+	vol, has := loader.volumes[volName]
+	if has {
+		delete(loader.volumes, volName)
+		log.LogDebugf("Release: release volume: volume(%v)", volName)
+	}
+	loader.volMu.Unlock()
+	if has && vol != nil {
+		if closeErr := vol.Close(); closeErr != nil {
+			log.LogErrorf("Release: close volume fail: volume(%v) err(%v)", volName, closeErr)
+		}
+	}
+}
+
 func (loader *VolumeLoader) Close() {
 	loader.closeOnce.Do(func() {
 		loader.volMu.Lock()
@@ -232,18 +248,6 @@ func (loader *VolumeLoader) Close() {
 	})
 }
 
-func NewVolumeLoader(masters []string, store Store, strict bool) *VolumeLoader {
-	loader := &VolumeLoader{
-		masters:    masters,
-		store:      store,
-		volumes:    make(map[string]*Volume),
-		closeCh:    make(chan struct{}),
-		metaStrict: strict,
-	}
-	go loader.blacklistCleanup()
-	return loader
-}
-
 type VolumeManager struct {
 	masters    []string
 	mc         *master.MasterClient
@@ -254,9 +258,14 @@ type VolumeManager struct {
 	closeCh    chan struct{}
 }
 
-func (m *VolumeManager) selectLoader(name string) *VolumeLoader {
-	i := crc32.ChecksumIEEE([]byte(name)) % volumeLoaderNum
-	return m.loaders[i]
+func NewVolumeManager(masters []string, strict bool) *VolumeManager {
+	manager := &VolumeManager{
+		masters:    masters,
+		closeCh:    make(chan struct{}),
+		metaStrict: strict,
+	}
+	manager.init()
+	return manager
 }
 
 func (m *VolumeManager) Volume(volName string) (*Volume, error) {
@@ -267,7 +276,6 @@ func (m *VolumeManager) VolumeWithoutBlacklist(volName string) (*Volume, error) 
 	return m.selectLoader(volName).VolumeWithoutBlacklist(volName)
 }
 
-// Release all
 func (m *VolumeManager) Close() {
 	m.closeOnce.Do(func() {
 		for _, loader := range m.loaders {
@@ -289,12 +297,7 @@ func (m *VolumeManager) init() {
 	}
 }
 
-func NewVolumeManager(masters []string, strict bool) *VolumeManager {
-	manager := &VolumeManager{
-		masters:    masters,
-		closeCh:    make(chan struct{}),
-		metaStrict: strict,
-	}
-	manager.init()
-	return manager
+func (m *VolumeManager) selectLoader(name string) *VolumeLoader {
+	i := crc32.ChecksumIEEE([]byte(name)) % volumeLoaderNum
+	return m.loaders[i]
 }

@@ -25,6 +25,74 @@ import (
 	"github.com/cubefs/cubefs/util/log"
 )
 
+type AdminAPIInterface interface {
+	GetCluster() (cv *proto.ClusterView, err error)
+	GetClusterNodeInfo() (cn *proto.ClusterNodeInfo, err error)
+	GetClusterIP() (cp *proto.ClusterIP, err error)
+	GetClusterStat() (cs *proto.ClusterStatInfo, err error)
+	ListZones() (zoneViews []*proto.ZoneView, err error)
+	ListNodeSets(zoneName string) (nodeSetStats []*proto.NodeSetStat, err error)
+	GetNodeSet(nodeSetId string) (nodeSetStatInfo *proto.NodeSetStatInfo, err error)
+	UpdateNodeSet(nodeSetId string, dataNodeSelector string, metaNodeSelector string) (err error)
+	UpdateZone(name string, enable bool, dataNodesetSelector string, metaNodesetSelector string,
+		dataNodeSelector string, metaNodeSelector string) (err error)
+	Topo() (topo *proto.TopologyView, err error)
+	GetDataPartition(volName string, partitionID uint64) (partition *proto.DataPartitionInfo, err error)
+	GetDataPartitionById(partitionID uint64) (partition *proto.DataPartitionInfo, err error)
+	DiagnoseDataPartition(ignoreDiscardDp bool) (diagnosis *proto.DataPartitionDiagnosis, err error)
+	DiagnoseMetaPartition() (diagnosis *proto.MetaPartitionDiagnosis, err error)
+	LoadDataPartition(volName string, partitionID uint64) (err error)
+	CreateDataPartition(volName string, count int) (err error)
+	DecommissionDataPartition(dataPartitionID uint64, nodeAddr string, raftForce bool) (err error)
+	DecommissionMetaPartition(metaPartitionID uint64, nodeAddr string) (err error)
+	DeleteDataReplica(dataPartitionID uint64, nodeAddr string) (err error)
+	AddDataReplica(dataPartitionID uint64, nodeAddr string) (err error)
+	DeleteMetaReplica(metaPartitionID uint64, nodeAddr string) (err error)
+	AddMetaReplica(metaPartitionID uint64, nodeAddr string) (err error)
+	DeleteVolume(volName, authKey string) (err error)
+	UpdateVolume(vv *proto.SimpleVolView, txTimeout int64, txMask string, txForceReset bool, txConflictRetryNum int64,
+		txConflictRetryInterval int64, txOpLimit int) (err error)
+	PutDataPartitions(volName string, dpsView []byte) (err error)
+	VolShrink(volName string, capacity uint64, authKey string) (err error)
+	VolExpand(volName string, capacity uint64, authKey string) (err error)
+	CreateVolName(volName, owner string, capacity uint64, crossZone, normalZonesFirst bool, business string,
+		mpCount, replicaNum, size, volType int, followerRead bool, zoneName, cacheRuleKey string, ebsBlkSize,
+		cacheCapacity, cacheAction, cacheThreshold, cacheTTL, cacheHighWater, cacheLowWater, cacheLRUInterval int,
+		dpReadOnlyWhenVolFull bool, txMask string, txTimeout uint32, txConflictRetryNum int64, txConflictRetryInterval int64, optEnableQuota string) (err error)
+	CreateDefaultVolume(volName, owner string) (err error)
+	GetVolumeSimpleInfo(volName string) (vv *proto.SimpleVolView, err error)
+	UploadFlowInfo(volName string, flowInfo *proto.ClientReportLimitInfo) (vv *proto.LimitRsp2Client, err error)
+	GetVolumeSimpleInfoWithFlowInfo(volName string) (vv *proto.SimpleVolView, err error)
+	CheckACL() (ci *proto.ClusterInfo, err error)
+	GetClusterInfo() (ci *proto.ClusterInfo, err error)
+	CreateMetaPartition(volName string, inodeStart uint64) (err error)
+	ListVols(keywords string) (volsInfo []*proto.VolInfo, err error)
+	IsFreezeCluster(isFreeze bool) (err error)
+	SetMetaNodeThreshold(threshold float64) (err error)
+	SetClusterParas(batchCount, markDeleteRate, deleteWorkerSleepMs, autoRepairRate, loadFactor, maxDpCntLimit,
+		dataNodesetSelector, metaNodesetSelector, dataNodeSelector, metaNodeSelector string) (err error)
+	GetClusterParas() (delParas map[string]string, err error)
+	CreatePreLoadDataPartition(volName string, count int, capacity, ttl uint64, zongs string) (view *proto.DataPartitionsView, err error)
+	ListQuota(volName string) (quotaInfo []*proto.QuotaInfo, err error)
+	CreateQuota(volName string, quotaPathInfos []proto.QuotaPathInfo, maxFiles uint64, maxBytes uint64) (quotaId uint32, err error)
+	UpdateQuota(volName string, quotaId string, maxFiles uint64, maxBytes uint64) (err error)
+	DeleteQuota(volName string, quotaId string) (err error)
+	GetQuota(volName string, quotaId string) (quotaInfo *proto.QuotaInfo, err error)
+	QueryBadDisks() (badDisks *proto.BadDiskInfos, err error)
+	ListQuotaAll() (volsInfo []*proto.VolInfo, err error)
+	GetDiscardDataPartition() (DiscardDpInfos *proto.DiscardDataPartitionInfos, err error)
+	DeleteVersion(volName string, verSeq string) (err error)
+	SetStrategy(volName string, periodic string, count string, enable string, force string) (err error)
+	CreateVersion(volName string) (ver *proto.VolVersionInfo, err error)
+	GetLatestVer(volName string) (ver *proto.VolVersionInfo, err error)
+	GetVerList(volName string) (verList *proto.VolVersionInfoList, err error)
+	GetVerInfo(volName string) (ci *proto.VolumeVerInfo, err error)
+	SetBucketLifecycle(req *proto.LcConfiguration) (err error)
+	GetBucketLifecycle(volume string) (lcConf *proto.LcConfiguration, err error)
+	DelBucketLifecycle(volume string) (err error)
+	GetMonitorPushAddr() (addr string, err error)
+}
+
 type AdminAPI struct {
 	mc *MasterClient
 }
@@ -90,6 +158,7 @@ func (api *AdminAPI) GetClusterStat() (cs *proto.ClusterStatInfo, err error) {
 	}
 	return
 }
+
 func (api *AdminAPI) ListZones() (zoneViews []*proto.ZoneView, err error) {
 	var request = newAPIRequest(http.MethodGet, proto.GetAllZones)
 	var buf []byte
@@ -102,6 +171,7 @@ func (api *AdminAPI) ListZones() (zoneViews []*proto.ZoneView, err error) {
 	}
 	return
 }
+
 func (api *AdminAPI) ListNodeSets(zoneName string) (nodeSetStats []*proto.NodeSetStat, err error) {
 	var request = newAPIRequest(http.MethodGet, proto.GetAllNodeSets)
 	if zoneName != "" {
@@ -117,6 +187,7 @@ func (api *AdminAPI) ListNodeSets(zoneName string) (nodeSetStats []*proto.NodeSe
 	}
 	return
 }
+
 func (api *AdminAPI) GetNodeSet(nodeSetId string) (nodeSetStatInfo *proto.NodeSetStatInfo, err error) {
 	var request = newAPIRequest(http.MethodGet, proto.GetNodeSet)
 	request.addParam("nodesetId", nodeSetId)
@@ -889,6 +960,7 @@ func (api *AdminAPI) SetBucketLifecycle(req *proto.LcConfiguration) (err error) 
 	}
 	return
 }
+
 func (api *AdminAPI) GetBucketLifecycle(volume string) (lcConf *proto.LcConfiguration, err error) {
 	var request = newAPIRequest(http.MethodGet, proto.GetBucketLifecycle)
 	request.addParam("name", volume)
@@ -902,6 +974,7 @@ func (api *AdminAPI) GetBucketLifecycle(volume string) (lcConf *proto.LcConfigur
 	}
 	return
 }
+
 func (api *AdminAPI) DelBucketLifecycle(volume string) (err error) {
 	var request = newAPIRequest(http.MethodGet, proto.DeleteBucketLifecycle)
 	request.addParam("name", volume)

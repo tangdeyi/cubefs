@@ -298,6 +298,10 @@ func (mw *MetaWrapper) exporterKey(act string) string {
 	return fmt.Sprintf("%s_sdk_meta_%s", mw.cluster, act)
 }
 
+func (mw *MetaWrapper) IsEnableQuota() bool {
+	return mw.EnableQuota
+}
+
 // Proto ResultCode to status
 func parseStatus(result uint8) (status int) {
 	switch result {

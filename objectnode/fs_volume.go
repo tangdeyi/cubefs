@@ -124,12 +124,62 @@ type ListFilesV2Result struct {
 	CommonPrefixes []string
 }
 
+type ExtentClientAPI interface {
+	OpenStream(inode uint64) error
+	Read(inode uint64, data []byte, offset int, size int) (read int, err error)
+	Write(inode uint64, offset int, data []byte, flags int, checkFunc func() error) (write int, err error)
+	Flush(inode uint64) error
+	CloseStream(inode uint64) error
+	EvictStream(inode uint64) error
+	Close() error
+	UidIsLimited(uid uint32) bool
+}
+
+type MetaClientAPI interface {
+	Create_ll(parentID uint64, name string, mode, uid, gid uint32, target []byte) (*proto.InodeInfo, error)
+	InodeCreate_ll(parentID uint64, mode, uid, gid uint32, target []byte, quotaIds []uint64) (*proto.InodeInfo, error)
+	InodeGet_ll(inode uint64) (*proto.InodeInfo, error)
+	InodeDelete_ll(inode uint64) error
+	BatchInodeGet(inodes []uint64) []*proto.InodeInfo
+	DentryCreate_ll(parentID uint64, name string, inode uint64, mode uint32) error
+	DentryUpdate_ll(parentID uint64, name string, inode uint64) (oldInode uint64, err error)
+	Lookup_ll(parentID uint64, name string) (inode uint64, mode uint32, err error)
+	DeleteWithCond_ll(parentID, cond uint64, name string, isDir bool) (*proto.InodeInfo, error)
+	Delete_ll(parentID uint64, name string, isDir bool) (*proto.InodeInfo, error)
+	ReadDir_ll(parentID uint64) ([]proto.Dentry, error)
+	ReadDirLimit_ll(parentID uint64, from string, limit uint64) ([]proto.Dentry, error)
+	InitMultipart_ll(path string, extend map[string]string) (multipartId string, err error)
+	AddMultipartPart_ll(path, multipartId string, partId uint16, size uint64, md5 string, inodeInfo *proto.InodeInfo) (oldInode uint64, updated bool, err error)
+	GetMultipart_ll(path, multipartId string) (info *proto.MultipartInfo, err error)
+	ListMultipart_ll(prefix, delimiter, keyMarker string, multipartIdMarker string, maxUploads uint64) (sessionResponse []*proto.MultipartInfo, err error)
+	RemoveMultipart_ll(path, multipartID string) (err error)
+	XAttrGet_ll(inode uint64, name string) (*proto.XAttrInfo, error)
+	XAttrGetAll_ll(inode uint64) (*proto.XAttrInfo, error)
+	XAttrDel_ll(inode uint64, name string) error
+	XAttrSet_ll(inode uint64, name, value []byte) error
+	XAttrsList_ll(inode uint64) ([]string, error)
+	BatchSetXAttr_ll(inode uint64, attrs map[string]string) error
+	BatchGetXAttr(inodes []uint64, keys []string) ([]*proto.XAttrInfo, error)
+	GetExtents(inode uint64) (gen uint64, size uint64, extents []proto.ExtentKey, err error)
+	GetObjExtents(inode uint64) (gen uint64, size uint64, extents []proto.ExtentKey, objExtents []proto.ObjExtentKey, err error)
+	AppendObjExtentKeys(inode uint64, eks []proto.ObjExtentKey) error
+	AppendExtentKeys(inode uint64, eks []proto.ExtentKey) error
+	InodeLink_ll(inode uint64) (*proto.InodeInfo, error)
+	InodeUnlink_ll(inode uint64) (*proto.InodeInfo, error)
+	Evict(inode uint64) error
+	Owner() string
+	OSSSecure() (accessKey, secretKey string)
+	Close() error
+	IsEnableQuota() bool
+	IsQuotaLimitedById(inodeId uint64, size bool, files bool) bool
+}
+
 // Volume is a high-level encapsulation of meta sdk and data sdk methods.
 // A high-level approach that exposes the semantics of object storage to the outside world.
 // Volume escapes high-level object storage semantics to low-level POSIX semantics.
 type Volume struct {
-	mw         *meta.MetaWrapper
-	ec         *stream.ExtentClient
+	mw         MetaClientAPI
+	ec         ExtentClientAPI
 	store      Store // Storage for ACP management
 	name       string
 	owner      string
@@ -1001,7 +1051,7 @@ func (v *Volume) InitMultipart(path string, opt *PutFileOption) (multipartID str
 		extend[XAttrKeyOSSACL] = opt.ACL.XmlEncode()
 	}
 
-	if v.mw.EnableQuota {
+	if v.mw.IsEnableQuota() {
 		var parentId uint64
 		if parentId, err = v.recursiveMakeDirectory(path); err != nil {
 			log.LogErrorf("InitMultipart: recursive make dir fail: volume(%v) path(%v) multipartID(%v) err(%v)",
@@ -1392,7 +1442,7 @@ func (v *Volume) streamWrite(inode uint64, reader io.Reader, h hash.Hash) (size 
 		}
 		if readN > 0 {
 			checkFunc := func() error {
-				if !v.mw.EnableQuota {
+				if !v.mw.IsEnableQuota() {
 					return nil
 				}
 
@@ -3079,14 +3129,16 @@ func NewVolume(config *VolumeConfig) (*Volume, error) {
 }
 
 func (v *Volume) getEbsWriter(ino uint64) (writer *blobstore.Writer) {
+	mw := v.mw.(*meta.MetaWrapper)
+	ec := v.ec.(*stream.ExtentClient)
 	clientConf := blobstore.ClientConfig{
 		VolName:         v.name,
 		VolType:         v.volType,
 		Ino:             ino,
 		BlockSize:       v.ebsBlockSize,
 		Bc:              blockCache,
-		Mw:              v.mw,
-		Ec:              v.ec,
+		Mw:              mw,
+		Ec:              ec,
 		Ebsc:            ebsClient,
 		EnableBcache:    enableBlockcache,
 		WConcurrency:    writeThreads,
@@ -3103,14 +3155,16 @@ func (v *Volume) getEbsWriter(ino uint64) (writer *blobstore.Writer) {
 }
 
 func (v *Volume) getEbsReader(ino uint64) (reader *blobstore.Reader) {
+	mw := v.mw.(*meta.MetaWrapper)
+	ec := v.ec.(*stream.ExtentClient)
 	clientConf := blobstore.ClientConfig{
 		VolName:         v.name,
 		VolType:         v.volType,
 		Ino:             ino,
 		BlockSize:       v.ebsBlockSize,
 		Bc:              blockCache,
-		Mw:              v.mw,
-		Ec:              v.ec,
+		Mw:              mw,
+		Ec:              ec,
 		Ebsc:            ebsClient,
 		EnableBcache:    enableBlockcache,
 		WConcurrency:    writeThreads,

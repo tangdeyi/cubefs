@@ -80,19 +80,19 @@ func (c *MasterClient) Leader() (addr string) {
 	return
 }
 
-func (c *MasterClient) AdminAPI() *AdminAPI {
+func (c *MasterClient) AdminAPI() AdminAPIInterface {
 	return c.adminAPI
 }
 
-func (c *MasterClient) ClientAPI() *ClientAPI {
+func (c *MasterClient) ClientAPI() ClientAPIInterface {
 	return c.clientAPI
 }
 
-func (c *MasterClient) NodeAPI() *NodeAPI {
+func (c *MasterClient) NodeAPI() NodeAPIInterface {
 	return c.nodeAPI
 }
 
-func (c *MasterClient) UserAPI() *UserAPI {
+func (c *MasterClient) UserAPI() UserAPIInterface {
 	return c.userAPI
 }
 
