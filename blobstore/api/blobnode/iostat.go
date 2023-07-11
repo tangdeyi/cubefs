@@ -46,7 +46,7 @@ func (it IOType) IsValid() bool {
 }
 
 func (it IOType) String() string {
-	return IOtypemap[uint64(it)]
+	return IOtypemap[it]
 }
 
 func (it IOType) IsHighLevel() bool {
