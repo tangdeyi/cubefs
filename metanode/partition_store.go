@@ -395,6 +395,8 @@ func (mp *metaPartition) loadApplyID(rootDir string) (err error) {
 		return
 	}
 
+	mp.storedApplyId = mp.applyID
+
 	if cursor > atomic.LoadUint64(&mp.config.Cursor) {
 		atomic.StoreUint64(&mp.config.Cursor, cursor)
 	}
