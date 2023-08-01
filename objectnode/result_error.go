@@ -131,6 +131,7 @@ var (
 	InvalidMaxPartNumber                = &ErrorCode{"InvalidRequest", "the total part numbers exceed limit.", http.StatusBadRequest}
 	InvalidMinPartNumber                = &ErrorCode{"InvalidRequest", "you must specify at least one part.", http.StatusBadRequest}
 	DiskQuotaExceeded                   = &ErrorCode{"DiskQuotaExceeded", "Disk Quota Exceeded.", http.StatusBadRequest}
+	TooManyRequests                     = &ErrorCode{"TooManyRequests", "too many requests, please retry later", http.StatusTooManyRequests}
 )
 
 func HttpStatusErrorCode(code int) *ErrorCode {

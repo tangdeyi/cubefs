@@ -253,6 +253,9 @@ const (
 	opSyncAllocQuotaID uint32 = 0x40
 	opSyncSetQuota     uint32 = 0x41
 	opSyncDeleteQuota  uint32 = 0x42
+
+	opSyncS3QosSet    uint32 = 0x50
+	opSyncS3QosDelete uint32 = 0x51
 )
 
 const (
@@ -269,6 +272,7 @@ const (
 	zoneAcronym           = "zone"
 	domainAcronym         = "zoneDomain"
 	apiLimiterAcronym     = "al"
+	S3QoS                 = "s3qos"
 	maxDataPartitionIDKey = keySeparator + "max_dp_id"
 	maxMetaPartitionIDKey = keySeparator + "max_mp_id"
 	maxCommonIDKey        = keySeparator + "max_common_id"
@@ -298,4 +302,5 @@ const (
 	volWarnUsedRatio      = 0.9
 	volCachePrefix        = keySeparator + volNameAcronym + keySeparator
 	quotaPrefix           = keySeparator + "quota" + keySeparator
+	S3QoSPrefix           = keySeparator + S3QoS + keySeparator
 )

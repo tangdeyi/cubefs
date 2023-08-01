@@ -26,6 +26,7 @@ const (
 	RootIno    = uint64(1)
 	SummaryKey = "cbfs.dir.summary"
 	QuotaKey   = "qa"
+	S3Nodes    = "s3nodes"
 )
 
 const (
@@ -886,4 +887,17 @@ type GetUniqIDRequest struct {
 
 type GetUniqIDResponse struct {
 	Start uint64 `json:"start"`
+}
+
+type S3QosRequest struct {
+	Uid   string `json:"uid"`
+	Api   string `json:"api"`
+	Type  string `json:"type"`
+	Quota uint64 `json:"quota"`
+	Nodes uint64 `json:"nodes"`
+}
+
+type S3QoSResponse struct {
+	ApiLimitConf map[string]*UserLimitConf `json:"user_limit_conf"` // api --> userLimitConf
+	Nodes        uint64                    `json:"nodes"`
 }

@@ -75,6 +75,8 @@ const (
 	HeaderNameIfNoneMatch       = "If-None-Match"
 	HeaderNameIfModifiedSince   = "If-Modified-Since"
 	HeaderNameIfUnmodifiedSince = "If-Unmodified-Since"
+
+	HeaderNameXAmzDecodedContentLength = "x-amz-decoded-content-length"
 )
 
 const (
@@ -116,9 +118,10 @@ const (
 )
 
 const (
-	MaxKeys    = 1000
-	MaxParts   = 1000
-	MaxUploads = 1000
+	MaxKeys        = 1000
+	MaxParts       = 1000
+	MaxUploads     = 1000
+	SinglePutLimit = 5 * 1 << 30 // 5G
 )
 
 const (

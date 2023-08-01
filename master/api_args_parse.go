@@ -1603,3 +1603,17 @@ func extractInodeId(r *http.Request) (inode uint64, err error) {
 	}
 	return strconv.ParseUint(value, 10, 64)
 }
+
+func parseS3QosReq(r *http.Request, req *proto.S3QosRequest) (err error) {
+	var body []byte
+	if body, err = ioutil.ReadAll(r.Body); err != nil {
+		return
+	}
+
+	if err = json.Unmarshal(body, &req); err != nil {
+		return
+	}
+
+	log.LogInfof("parseS3QosReq[%+v] success.", *req)
+	return
+}

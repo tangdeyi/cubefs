@@ -82,6 +82,7 @@ type Cluster struct {
 	inodeCountNotEqualMP         *sync.Map
 	maxInodeNotEqualMP           *sync.Map
 	dentryCountNotEqualMP        *sync.Map
+	S3ApiQosQuota                *sync.Map // (api,uid,limtType) -> limitQuota
 }
 
 type followerReadManager struct {
@@ -314,6 +315,7 @@ func newCluster(name string, leaderInfo *LeaderInfo, fsm *MetadataFsm, partition
 	c.inodeCountNotEqualMP = new(sync.Map)
 	c.maxInodeNotEqualMP = new(sync.Map)
 	c.dentryCountNotEqualMP = new(sync.Map)
+	c.S3ApiQosQuota = new(sync.Map)
 	return
 }
 
