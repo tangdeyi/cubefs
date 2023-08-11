@@ -181,7 +181,6 @@ const (
 const (
 	opCreateDentryEx = 10001
 	opSetInodeLock   = 10002
-	//opFsmCreateInodeEx = 10003
 )
 
 var (
