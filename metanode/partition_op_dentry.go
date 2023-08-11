@@ -152,9 +152,9 @@ func (mp *metaPartition) QuotaCreateDentry(req *proto.QuotaCreateDentryRequest, 
 		Name:     req.Name,
 		Inode:    req.Inode,
 		Type:     req.Mode,
+		FileId:   req.FileId,
 	}
 
-	// TODO createDentryEx support snap and tx
 	if req.OldIno != 0 {
 		return mp.createDentryEx(dentry, req.OldIno, p)
 	}
@@ -505,8 +505,9 @@ func (mp *metaPartition) Lookup(req *LookupReq, p *Packet) (err error) {
 	var reply []byte
 	if status == proto.OpOk {
 		resp := &LookupResp{
-			Inode: dentry.Inode,
-			Mode:  dentry.Type,
+			Inode:  dentry.Inode,
+			Mode:   dentry.Type,
+			FileId: dentry.FileId,
 		}
 		reply, err = json.Marshal(resp)
 		if err != nil {

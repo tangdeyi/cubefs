@@ -44,6 +44,7 @@ type Dentry struct {
 	Name     string // Name of the current dentry.
 	Inode    uint64 // FileID value of the current inode.
 	Type     uint32
+	FileId   uint64
 }
 
 type DentryBatch []*Dentry
@@ -395,6 +396,9 @@ func (d *Dentry) MarshalValue() (k []byte) {
 	if err := binary.Write(buff, binary.BigEndian, &d.Type); err != nil {
 		panic(err)
 	}
+	if err := binary.Write(buff, binary.BigEndian, &d.FileId); err != nil {
+		panic(err)
+	}
 	k = buff.Bytes()
 	return
 }
@@ -406,5 +410,13 @@ func (d *Dentry) UnmarshalValue(val []byte) (err error) {
 		return
 	}
 	err = binary.Read(buff, binary.BigEndian, &d.Type)
+	if err != nil {
+		return
+	}
+	if buff.Len() != 0 {
+		if err = binary.Read(buff, binary.BigEndian, &d.FileId); err != nil {
+			return
+		}
+	}
 	return
 }

@@ -564,36 +564,30 @@ func (mw *MetaWrapper) quotaDcreate(mp *MetaPartition, parentID uint64, name str
 }
 
 func (mw *MetaWrapper) dcreate(mp *MetaPartition, parentID uint64, name string, inode uint64, mode uint32, quotaIds []uint32) (status int, err error) {
-	return mw.dcreateEx(mp, parentID, name, inode, 0, mode, quotaIds)
+
+	req := &proto.CreateDentryRequest{
+		ParentID: parentID,
+		Name:     name,
+		Inode:    inode,
+		Mode:     mode,
+		QuotaIds: quotaIds,
+	}
+
+	return mw.dcreateEx(mp, req)
 }
 
-func (mw *MetaWrapper) dcreateEx(mp *MetaPartition, parentID uint64, name string, inode, oldIno uint64, mode uint32,
-	quotaIds []uint32) (status int, err error) {
+func (mw *MetaWrapper) dcreateEx(mp *MetaPartition, req *proto.CreateDentryRequest) (status int, err error) {
 	bgTime := stat.BeginStat()
 	defer func() {
 		stat.EndStat("dcreate", err, bgTime, 1)
 	}()
 
-	if parentID == inode {
+	if req.ParentID == req.Inode {
 		return statusExist, nil
 	}
 
-	ver := uint64(0)
-	if mw.Client != nil {
-		ver = mw.Client.GetLatestVer()
-	}
-
-	req := &proto.CreateDentryRequest{
-		VolName:     mw.volname,
-		PartitionID: mp.PartitionID,
-		ParentID:    parentID,
-		Inode:       inode,
-		Name:        name,
-		Mode:        mode,
-		QuotaIds:    quotaIds,
-		OldIno:      oldIno,
-		VerSeq:      ver,
-	}
+	req.PartitionID = mp.PartitionID
+	req.VolName = mw.volname
 
 	packet := proto.NewPacketReqID()
 	packet.Opcode = proto.OpMetaCreateDentry
@@ -617,7 +611,7 @@ func (mw *MetaWrapper) dcreateEx(mp *MetaPartition, parentID uint64, name string
 
 	status = parseStatus(packet.ResultCode)
 	if (status != statusOK) && (status != statusExist) {
-		err = errors.New(packet.GetResultMsg())
+		//err = errors.New(packet.GetResultMsg())
 		log.LogErrorf("dcreate: packet(%v) mp(%v) req(%v) result(%v)", packet, mp, *req, packet.GetResultMsg())
 	} else if status == statusExist {
 		log.LogWarnf("dcreate: packet(%v) mp(%v) req(%v) result(%v)", packet, mp, *req, packet.GetResultMsg())
@@ -886,7 +880,7 @@ func (mw *MetaWrapper) canDeleteInode(mp *MetaPartition, info *proto.InodeInfo, 
 	return true, nil
 }
 
-func (mw *MetaWrapper) lookup(mp *MetaPartition, parentID uint64, name string) (status int, inode uint64, mode uint32, err error) {
+func (mw *MetaWrapper) lookupEx(mp *MetaPartition, parentId uint64, name string, verSeq uint64) (status int, err error, den *proto.Dentry)
 	bgTime := stat.BeginStat()
 	defer func() {
 		stat.EndStat("lookup", err, bgTime, 1)
@@ -895,7 +889,7 @@ func (mw *MetaWrapper) lookup(mp *MetaPartition, parentID uint64, name string) (
 	req := &proto.LookupRequest{
 		VolName:     mw.volname,
 		PartitionID: mp.PartitionID,
-		ParentID:    parentID,
+		ParentID:    parentId,
 		Name:        name,
 	}
 	packet := proto.NewPacketReqID()
@@ -944,7 +938,24 @@ func (mw *MetaWrapper) lookup(mp *MetaPartition, parentID uint64, name string) (
 		return
 	}
 	log.LogDebugf("lookup exit: packet(%v) mp(%v) req(%v) ino(%v) mode(%v)", packet, mp, *req, resp.Inode, resp.Mode)
-	return statusOK, resp.Inode, resp.Mode, nil
+	den = &proto.Dentry{
+		Inode:  resp.Inode,
+		Name:   name,
+		Type:   resp.Mode,
+		FileId: resp.FileId,
+	}
+
+	return statusOK, err, den
+}
+
+func (mw *MetaWrapper) lookup(mp *MetaPartition, parentID uint64, name string, verSeq uint64) (status int, inode uint64, mode uint32, err error) {
+	den := &proto.Dentry{}
+	status, err, den = mw.lookupEx(mp, parentID, name, verSeq)
+	if den != nil {
+		return status, den.Inode, den.Type, err
+	}
+
+	return
 }
 
 func (mw *MetaWrapper) iget(mp *MetaPartition, inode uint64) (status int, info *proto.InodeInfo, err error) {
@@ -994,7 +1005,7 @@ func (mw *MetaWrapper) iget(mp *MetaPartition, inode uint64) (status int, info *
 	return statusOK, resp.Info, nil
 }
 
-func (mw *MetaWrapper) batchIgetWithErr(mp *MetaPartition, inodes []uint64) (infos []*proto.InodeInfo, err error) {
+func (mw *MetaWrapper) batchIgetEx(mp *MetaPartition, inodes []uint64) (infos []*proto.InodeInfo, err error) {
 	bgTime := stat.BeginStat()
 	defer func() {
 		stat.EndStat("batchIgetWithErr", err, bgTime, 1)

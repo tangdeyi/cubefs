@@ -109,7 +109,6 @@ func (mw *MetaWrapper) Statfs() (total, used, inodeCount uint64) {
 }
 
 func (mw *MetaWrapper) Create_ll(parentID uint64, name string, mode, uid, gid uint32, target []byte) (*proto.InodeInfo, error) {
-	//if mw.EnableTransaction {
 	txMask := proto.TxOpMaskOff
 	if proto.IsRegular(mode) {
 		txMask = proto.TxOpMaskCreate
@@ -327,6 +326,95 @@ func (mw *MetaWrapper) Lookup_ll(parentID uint64, name string) (inode uint64, mo
 	return inode, mode, nil
 }
 
+func (mw *MetaWrapper) LookupEx_ll(parentId uint64, name string) (den *proto.Dentry, err error) {
+	parentMP := mw.getPartitionByInode(parentId)
+	if parentMP == nil {
+		log.LogErrorf("LookUpEx_ll: No parent partition, parentID(%v) name(%v)", parentId, name)
+		return nil, syscall.ENOENT
+	}
+
+	status, err, den := mw.lookupEx(parentMP, parentId, name, mw.VerReadSeq)
+	if err != nil || status != statusOK {
+		return nil, statusToErrno(status)
+	}
+
+	return den, nil
+}
+
+func (mw *MetaWrapper) BatchGetExpiredMultipart(prefix string, days int) (expiredIds []*proto.ExpiredMultipartInfo, err error) {
+	partitions := mw.partitions
+	var (
+		mp *MetaPartition
+	)
+	var wg = new(sync.WaitGroup)
+	var resultMu sync.Mutex
+	log.LogDebugf("BatchGetExpiredMultipart: mp num(%v) prefix(%v) days(%v)", len(partitions), prefix, days)
+	for _, mp = range partitions {
+		wg.Add(1)
+		go func(mp *MetaPartition) {
+			defer wg.Done()
+			status, infos, err := mw.getExpiredMultipart(prefix, days, mp)
+			if err == nil && status == statusOK {
+				resultMu.Lock()
+				expiredIds = append(expiredIds, infos...)
+				resultMu.Unlock()
+			}
+			if err != nil && err != syscall.ENOENT {
+				log.LogErrorf("batchGetExpiredMultipart: get expired multipart fail: partitionId(%v)",
+					mp.PartitionID)
+			}
+		}(mp)
+	}
+	wg.Wait()
+
+	resultMu.Lock()
+	defer resultMu.Unlock()
+	if len(expiredIds) == 0 {
+		err = syscall.ENOENT
+		return
+	}
+	return
+}
+
+func (mw *MetaWrapper) BatchInodeExpirationGet(dentries []*proto.ScanDentry, cond *proto.InodeExpireCondition) []*proto.ExpireInfo {
+	var wg sync.WaitGroup
+
+	batchInfos := make([]*proto.ExpireInfo, 0)
+	resp := make(chan []*proto.ExpireInfo, BatchIgetRespBuf)
+	candidates := make(map[uint64][]*proto.ScanDentry)
+
+	// Target partition does not have to be very accurate.
+	for _, d := range dentries {
+		mp := mw.getPartitionByInode(d.Inode)
+		if mp == nil {
+			continue
+		}
+		if _, ok := candidates[mp.PartitionID]; !ok {
+			candidates[mp.PartitionID] = make([]*proto.ScanDentry, 0, 256)
+		}
+		candidates[mp.PartitionID] = append(candidates[mp.PartitionID], d)
+	}
+
+	for id, ds := range candidates {
+		mp := mw.getPartitionByID(id)
+		if mp == nil {
+			continue
+		}
+		wg.Add(1)
+		go mw.batchExpriratrionGet(&wg, mp, ds, cond, resp)
+	}
+
+	go func() {
+		wg.Wait()
+		close(resp)
+	}()
+
+	for infos := range resp {
+		batchInfos = append(batchInfos, infos...)
+	}
+	return batchInfos
+}
+
 func (mw *MetaWrapper) InodeGet_ll(inode uint64) (*proto.InodeInfo, error) {
 	mp := mw.getPartitionByInode(inode)
 	if mp == nil {
@@ -447,7 +535,7 @@ func (mw *MetaWrapper) BatchInodeGetWith(inodes []uint64) (batchInfos []*proto.I
 				wg.Done()
 				<-limit
 			}()
-			subInfos, err1 := mw.batchIgetWithErr(mp, nodes)
+			subInfos, err1 := mw.batchIgetEx(mp, nodes)
 			if err1 != nil {
 				err = fmt.Errorf("invoke batchIgetWithErr failed, err %s", err1.Error())
 				return
@@ -1013,9 +1101,13 @@ func (mw *MetaWrapper) rename_ll(srcParentID uint64, srcName string, dstParentID
 
 	// look up for the src ino
 	status, inode, mode, err := mw.lookup(srcParentMP, srcParentID, srcName)
+	//status, inode, mode, err := mw.lookup(srcParentMP, srcParentID, srcName, 0)
+	status, err, den := mw.lookupEx(srcParentMP, srcParentID, srcName, 0)
 	if err != nil || status != statusOK {
 		return statusToErrno(status)
 	}
+	inode := den.Inode
+	mode := den.Type
 
 	srcMP := mw.getPartitionByInode(inode)
 	if srcMP == nil {
@@ -1029,6 +1121,15 @@ func (mw *MetaWrapper) rename_ll(srcParentID uint64, srcName string, dstParentID
 
 	// create dentry in dst parent
 	status, err = mw.dcreate(dstParentMP, dstParentID, dstName, inode, mode)
+	createReq := &proto.CreateDentryRequest{
+		ParentID: dstParentID,
+		Name:     dstName,
+		Inode:    inode,
+		Mode:     mode,
+		QuotaIds: quotaIds,
+		FileId:   den.FileId,
+	}
+	status, err = mw.dcreateEx(dstParentMP, createReq)
 	if err != nil {
 		if status == statusOpDirQuota {
 			return statusToErrno(status)
@@ -1187,14 +1288,13 @@ func (mw *MetaWrapper) DentryCreate_ll(parentID uint64, name string, inode uint6
 	return nil
 }
 
-func (mw *MetaWrapper) DentryCreateEx_ll(parentID uint64, name string, inode, oldIno uint64, mode uint32) error {
-	parentMP := mw.getPartitionByInode(parentID)
+func (mw *MetaWrapper) DentryCreateEx_ll(req *proto.CreateDentryRequest) error {
+	parentMP := mw.getPartitionByInode(req.ParentID)
 	if parentMP == nil {
 		return syscall.ENOENT
 	}
-	var err error
-	var status int
-	if status, err = mw.dcreateEx(parentMP, parentID, name, inode, oldIno, mode, nil); err != nil || status != statusOK {
+
+	if status, err := mw.dcreateEx(parentMP, req); err != nil || status != statusOK {
 		return statusToErrno(status)
 	}
 	return nil

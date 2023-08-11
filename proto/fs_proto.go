@@ -153,14 +153,15 @@ func (info XAttrInfo) String() string {
 
 // Dentry defines the dentry struct.
 type Dentry struct {
-	Name  string `json:"name"`
-	Inode uint64 `json:"ino"`
-	Type  uint32 `json:"type"`
+	Name   string `json:"name"`
+	Inode  uint64 `json:"ino"`
+	Type   uint32 `json:"type"`
+	FileId uint64 `json:"fileId"`
 }
 
 // String returns the string format of the dentry.
 func (d Dentry) String() string {
-	return fmt.Sprintf("Dentry{Name(%v),Inode(%v),Type(%v)}", d.Name, d.Inode, d.Type)
+	return fmt.Sprintf("Dentry{Name(%v),Inode(%v),Type(%v),FileId(%d)}", d.Name, d.Inode, d.Type, d.FileId)
 }
 
 func (d *Dentry) IsDir() bool {
@@ -383,6 +384,8 @@ type CreateDentryRequest struct {
 	Inode       uint64 `json:"ino"`
 	Name        string `json:"name"`
 	Mode        uint32 `json:"mode"`
+	OldIno      uint64 `json:"old_ino"`
+	FileId      uint64 `json:"file_id"`
 }
 
 type TxPack interface {
@@ -497,8 +500,9 @@ type LookupRequest struct {
 
 // LookupResponse defines the response for the loopup request.
 type LookupResponse struct {
-	Inode uint64 `json:"ino"`
-	Mode  uint32 `json:"mode"`
+	Inode  uint64 `json:"ino"`
+	Mode   uint32 `json:"mode"`
+	FileId uint64 `json:"fileId"`
 }
 
 // InodeGetRequest defines the request to get the inode.
