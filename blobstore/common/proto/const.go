@@ -87,16 +87,21 @@ func (status VolumeStatus) String() string {
 		return "lock"
 	case VolumeStatusUnlocking:
 		return "unlocking"
+	case VolumeStatusSealed:
+		return "sealed"
 	}
 	return "unknown"
 }
 
+// VolumeStatus has idle, active, lock, unlocking and sealed state
+// VolumeStatusSealed is state which need inspect
 const (
 	volumeStatusMin = VolumeStatus(iota)
 	VolumeStatusIdle
 	VolumeStatusActive
 	VolumeStatusLock
 	VolumeStatusUnlocking
+	VolumeStatusSealed
 	volumeStatusMax
 )
 
