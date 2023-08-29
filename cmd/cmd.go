@@ -163,7 +163,7 @@ func main() {
 	logLeftSpaceLimitStr := cfg.GetString(ConfigKeyLogLeftSpaceLimit)
 	logLeftSpaceLimit, err := strconv.ParseInt(logLeftSpaceLimitStr, 10, 64)
 	if err != nil || logLeftSpaceLimit == 0 {
-		log.LogErrorf("logLeftSpaceLimit is not a legal int value: ", err.Error())
+		log.LogErrorf("logLeftSpaceLimit is not a legal int value: %v", err.Error())
 		logLeftSpaceLimit = log.DefaultLogLeftSpaceLimit
 	}
 
