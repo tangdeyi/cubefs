@@ -679,6 +679,7 @@ type SetXAttrRequest struct {
 	Inode       uint64 `json:"ino"`
 	Key         string `json:"key"`
 	Value       string `json:"val"`
+	OverWrite   bool   `json:"over_write"`
 }
 
 type BatchSetXAttrRequest struct {
