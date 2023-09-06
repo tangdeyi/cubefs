@@ -17,12 +17,13 @@ package db
 import (
 	"context"
 	"errors"
+	"os"
+	"sync"
+
 	bncom "github.com/cubefs/cubefs/blobstore/blobnode/base"
 	bloberr "github.com/cubefs/cubefs/blobstore/common/errors"
 	rdb "github.com/cubefs/cubefs/blobstore/common/kvstore"
 	"github.com/cubefs/cubefs/blobstore/common/trace"
-	"os"
-	"sync"
 )
 
 var (
