@@ -67,31 +67,18 @@ const (
 	RoleAuth      = "authnode"
 	RoleObject    = "objectnode"
 	RoleConsole   = "console"
-	RoleMaster    = "master"
-	RoleMeta      = "metanode"
-	RoleData      = "datanode"
-	RoleAuth      = "authnode"
-	RoleObject    = "objectnode"
-	RoleConsole   = "console"
 	RoleLifeCycle = "lcnode"
 	RoleAPI       = "apinode" // TODO, instead of objectnode
 )
 
 const (
-	ModuleMaster    = "master"
-	ModuleMeta      = "metaNode"
-	ModuleData      = "dataNode"
-	ModuleAuth      = "authNode"
-	ModuleObject    = "objectNode"
-	ModuleConsole   = "console"
-	ModuleMaster    = "master"
-	ModuleMeta      = "metaNode"
-	ModuleData      = "dataNode"
-	ModuleAuth      = "authNode"
-	ModuleObject    = "objectNode"
-	ModuleConsole   = "console"
-	ModuleAPI       = "apiNode"
-	ModuleLifeCycle = "lcnode"
+	ModuleMaster  = "master"
+	ModuleMeta    = "metaNode"
+	ModuleData    = "dataNode"
+	ModuleAuth    = "authNode"
+	ModuleObject  = "objectNode"
+	ModuleConsole = "console"
+	ModuleAPI     = "apiNode"
 )
 
 const (

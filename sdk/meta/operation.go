@@ -563,14 +563,13 @@ func (mw *MetaWrapper) quotaDcreate(mp *MetaPartition, parentID uint64, name str
 	return
 }
 
-func (mw *MetaWrapper) dcreate(mp *MetaPartition, parentID uint64, name string, inode uint64, mode uint32, quotaIds []uint32) (status int, err error) {
+func (mw *MetaWrapper) dcreate(mp *MetaPartition, parentID uint64, name string, inode uint64, mode uint32) (status int, err error) {
 
 	req := &proto.CreateDentryRequest{
 		ParentID: parentID,
 		Name:     name,
 		Inode:    inode,
 		Mode:     mode,
-		QuotaIds: quotaIds,
 	}
 
 	return mw.dcreateEx(mp, req)
@@ -880,7 +879,7 @@ func (mw *MetaWrapper) canDeleteInode(mp *MetaPartition, info *proto.InodeInfo, 
 	return true, nil
 }
 
-func (mw *MetaWrapper) lookupEx(mp *MetaPartition, parentId uint64, name string, verSeq uint64) (status int, err error, den *proto.Dentry)
+func (mw *MetaWrapper) lookupEx(mp *MetaPartition, parentId uint64, name string) (status int, err error, den *proto.Dentry) {
 	bgTime := stat.BeginStat()
 	defer func() {
 		stat.EndStat("lookup", err, bgTime, 1)
@@ -948,9 +947,9 @@ func (mw *MetaWrapper) lookupEx(mp *MetaPartition, parentId uint64, name string,
 	return statusOK, err, den
 }
 
-func (mw *MetaWrapper) lookup(mp *MetaPartition, parentID uint64, name string, verSeq uint64) (status int, inode uint64, mode uint32, err error) {
+func (mw *MetaWrapper) lookup(mp *MetaPartition, parentID uint64, name string) (status int, inode uint64, mode uint32, err error) {
 	den := &proto.Dentry{}
-	status, err, den = mw.lookupEx(mp, parentID, name, verSeq)
+	status, err, den = mw.lookupEx(mp, parentID, name)
 	if den != nil {
 		return status, den.Inode, den.Type, err
 	}
@@ -1054,66 +1053,66 @@ func (mw *MetaWrapper) batchIgetEx(mp *MetaPartition, inodes []uint64) (infos []
 	return
 }
 
-func (mw *MetaWrapper) batchExpriratrionGet(wg *sync.WaitGroup, mp *MetaPartition, dentries []*proto.ScanDentry, cond *proto.InodeExpireCondition, respCh chan []*proto.ExpireInfo) {
-	defer wg.Done()
-	var (
-		err error
-	)
-
-	bgTime := stat.BeginStat()
-	defer func() {
-		stat.EndStat("batchExpriratrionGet", err, bgTime, 1)
-	}()
-
-	req := &proto.BatchInodeGetExpirationRequest{
-		VolName:     mw.volname,
-		PartitionID: mp.PartitionID,
-		Dentries:    dentries,
-		Cond:        cond,
-	}
-
-	packet := proto.NewPacketReqID()
-	packet.Opcode = proto.OpMetaBatchInodeExpirationGet
-	packet.PartitionID = mp.PartitionID
-	err = packet.MarshalData(req)
-	if err != nil {
-		return
-	}
-
-	metric := exporter.NewTPCnt(packet.GetOpMsg())
-	defer func() {
-		metric.SetWithLabels(err, map[string]string{exporter.Vol: mw.volname})
-	}()
-
-	packet, err = mw.sendToMetaPartition(mp, packet)
-	if err != nil {
-		log.LogErrorf("batchIget: packet(%v) mp(%v) req(%v) err(%v)", packet, mp, *req, err)
-		return
-	}
-
-	status := parseStatus(packet.ResultCode)
-	if status != statusOK {
-		err = errors.New(packet.GetResultMsg())
-		log.LogErrorf("batchIget: packet(%v) mp(%v) req(%v) result(%v)", packet, mp, *req, packet.GetResultMsg())
-		return
-	}
-
-	resp := new(proto.BatchInodeGetExpirationResponse)
-	err = packet.UnmarshalData(resp)
-	if err != nil {
-		log.LogErrorf("batchIget: packet(%v) mp(%v) err(%v) PacketData(%v)", packet, mp, err, string(packet.Data))
-		return
-	}
-
-	if len(resp.ExpirationResults) == 0 {
-		return
-	}
-
-	select {
-	case respCh <- resp.ExpirationResults:
-	default:
-	}
-}
+//func (mw *MetaWrapper) batchExpriratrionGet(wg *sync.WaitGroup, mp *MetaPartition, dentries []*proto.ScanDentry, cond *proto.InodeExpireCondition, respCh chan []*proto.ExpireInfo) {
+//	defer wg.Done()
+//	var (
+//		err error
+//	)
+//
+//	bgTime := stat.BeginStat()
+//	defer func() {
+//		stat.EndStat("batchExpriratrionGet", err, bgTime, 1)
+//	}()
+//
+//	req := &proto.BatchInodeGetExpirationRequest{
+//		VolName:     mw.volname,
+//		PartitionID: mp.PartitionID,
+//		Dentries:    dentries,
+//		Cond:        cond,
+//	}
+//
+//	packet := proto.NewPacketReqID()
+//	packet.Opcode = proto.OpMetaBatchInodeExpirationGet
+//	packet.PartitionID = mp.PartitionID
+//	err = packet.MarshalData(req)
+//	if err != nil {
+//		return
+//	}
+//
+//	metric := exporter.NewTPCnt(packet.GetOpMsg())
+//	defer func() {
+//		metric.SetWithLabels(err, map[string]string{exporter.Vol: mw.volname})
+//	}()
+//
+//	packet, err = mw.sendToMetaPartition(mp, packet)
+//	if err != nil {
+//		log.LogErrorf("batchIget: packet(%v) mp(%v) req(%v) err(%v)", packet, mp, *req, err)
+//		return
+//	}
+//
+//	status := parseStatus(packet.ResultCode)
+//	if status != statusOK {
+//		err = errors.New(packet.GetResultMsg())
+//		log.LogErrorf("batchIget: packet(%v) mp(%v) req(%v) result(%v)", packet, mp, *req, packet.GetResultMsg())
+//		return
+//	}
+//
+//	resp := new(proto.BatchInodeGetExpirationResponse)
+//	err = packet.UnmarshalData(resp)
+//	if err != nil {
+//		log.LogErrorf("batchIget: packet(%v) mp(%v) err(%v) PacketData(%v)", packet, mp, err, string(packet.Data))
+//		return
+//	}
+//
+//	if len(resp.ExpirationResults) == 0 {
+//		return
+//	}
+//
+//	select {
+//	case respCh <- resp.ExpirationResults:
+//	default:
+//	}
+//}
 
 func (mw *MetaWrapper) batchIget(wg *sync.WaitGroup, mp *MetaPartition, inodes []uint64, respCh chan []*proto.InodeInfo) {
 	defer wg.Done()
