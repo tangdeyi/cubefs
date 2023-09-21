@@ -119,20 +119,20 @@ type RaftConfig struct {
 }
 
 type Service struct {
-	ConfigMgr  *configmgr.ConfigMgr
-	ScopeMgr   *scopemgr.ScopeMgr
-	ServiceMgr *servicemgr.ServiceMgr
+	ConfigMgr  *configmgr.ConfigMgr   // 通用的kv存取管理模块，如集群配置、任务开关
+	ScopeMgr   *scopemgr.ScopeMgr     // bid、vid、diskid等id分配范围scope的管理模块
+	ServiceMgr *servicemgr.ServiceMgr // 通用的服务注册发现管理模块，负责proxy等服务的注册发现
 	// Note: DiskMgr should always list before volumeMgr
 	// cause DiskMgr applier LoadData should be call first, or VolumeMgr LoadData may return error with disk not found
-	DiskMgr   *diskmgr.DiskMgr
-	VolumeMgr *volumemgr.VolumeMgr
+	DiskMgr   *diskmgr.DiskMgr     // 负责磁盘及空间管理，包括空间chunk分配、磁盘注册、心跳更新磁盘信息等
+	VolumeMgr *volumemgr.VolumeMgr // 卷管理模块，负责卷的创建、续租、更新映射等
 	KvMgr     *kvmgr.KvMgr
 
 	dbs map[string]base.SnapshotDB
 	// status indicate service's current state, like normal/snapshot
 	status uint32
 	// electedLeaderReadIndex indicate that service(elected leader) should execute ReadIndex or not before accept incoming request
-	electedLeaderReadIndex uint32
+	electedLeaderReadIndex uint32 // 用来表明主节点是否需要执行readIndex在接受请求前
 	raftNode               *base.RaftNode
 	raftStartOnce          sync.Once
 	raftStartCh            chan interface{}

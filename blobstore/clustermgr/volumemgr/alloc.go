@@ -45,8 +45,8 @@ type idleItem struct {
 
 type idleVolumes struct {
 	m              map[proto.Vid]idleItem
-	allocatable    *list.List
-	notAllocatable *list.List
+	allocatable    *list.List // 可分配的
+	notAllocatable *list.List // 不可分配的，空闲卷为啥包含不可分配的
 
 	sync.RWMutex
 }

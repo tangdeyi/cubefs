@@ -62,24 +62,37 @@ type raftServer struct {
 	proposeTimeout time.Duration
 	tickInterval   time.Duration
 	snapTimeout    time.Duration
-	lead           uint64
+	lead           uint64 // 当前leader的NodeId
 	n              raft.Node
 	shotter        *snapshotter
-	store          *raftStorage
-	idGen          *Generator
-	sm             StateMachine
-	readNotifier   atomic.Value
-	notifiers      sync.Map
-	tr             Transport
-	applyWait      WaitTime
-	propc          chan propose
-	readStateC     chan raft.ReadState
-	applyc         chan apply
-	snapshotC      chan Snapshot
-	snapMsgc       chan pb.Message
-	readwaitc      chan struct{}
-	stopc          chan struct{}
-	once           sync.Once
+	/*storage负责log entry存储，raft和storage联系很紧密，因此raft提供了storage接口，由用户实现，
+	然后在启动时设置到Config中，storage接口只涉及查询操作，何时持久化和如何持久化由用户决定*/
+	store        *raftStorage
+	idGen        *Generator
+	sm           StateMachine // 上层业务实现log entry的apply状态机
+	readNotifier atomic.Value
+	notifiers    sync.Map
+	/*
+		transportation 并没有在 etcd/raft 中处理，而是全权交给用户处理，需要发送的消息都会存放在 raft.msgs 中。
+		Ready 结构体包含自上次处理后已就绪的需要由用户处理的信息， 包括需要发送的 msg 和需要持久化存储的信息。
+		在 goroutine 每次循环开始会对比之前的状态与当前状态，生成 Ready， node.Ready() 方法就是返回对应的 readyc。
+		由用户对 Ready 处理，从而实现了分层：
+		1. 持久化 Entries、HardState、Snapshot；
+		2. 发送 Messages 给其他节点；
+		3. 应用 snapshot、CommittedEntries 到状态机；
+		4. 调用 node.Advance() 通知 raft 之前的更新已处理完，可以进行清理，同时可以处理下一轮更新
+	*/
+	tr Transport
+	/**/
+	applyWait  WaitTime
+	propc      chan propose
+	readStateC chan raft.ReadState
+	applyc     chan apply
+	snapshotC  chan Snapshot
+	snapMsgc   chan pb.Message
+	readwaitc  chan struct{}
+	stopc      chan struct{}
+	once       sync.Once
 }
 
 func NewRaftServer(cfg *Config) (RaftServer, error) {
@@ -484,6 +497,7 @@ func (s *raftServer) processSnapshotMessage(m pb.Message) {
 	s.tr.Send([]pb.Message{m})
 }
 
+// 重要的raft状态机循环
 func (s *raftServer) raftStart() {
 	ticker := time.NewTicker(s.tickInterval)
 	defer ticker.Stop()
@@ -492,8 +506,8 @@ func (s *raftServer) raftStart() {
 		case <-s.stopc:
 			return
 		case <-ticker.C:
-			s.n.Tick()
-		case rd := <-s.n.Ready():
+			s.n.Tick() // 逻辑时钟递增，选举和心跳超时时间相关
+		case rd := <-s.n.Ready(): // 处理Ready结构体，包含msgs和Entry
 			if rd.SoftState != nil {
 				leader := atomic.SwapUint64(&s.lead, rd.SoftState.Lead)
 				if rd.SoftState.Lead != leader {
@@ -529,16 +543,19 @@ func (s *raftServer) raftStart() {
 				return
 			}
 
+			// 收到其他node节点的请求，通过transport层，最终调用node.Step()传给raft状态机处理
 			if isLeader {
 				s.tr.Send(s.processMessages(rd.Messages))
 			}
 
+			// 持久化Entries
 			if len(rd.Entries) > 0 {
 				err := s.store.SaveEntries(rd.Entries)
 				if err != nil {
 					log.Panicf("save raft entries error: %v", err)
 				}
 			}
+			// 持久化HardState，Commit、Vote、Term
 			if !raft.IsEmptyHardState(rd.HardState) {
 				if err := s.store.SaveHardState(rd.HardState); err != nil {
 					log.Panicf("save raft hardstate error: %v", err)
@@ -567,6 +584,7 @@ func (s *raftServer) raftStart() {
 				notifyc <- struct{}{}
 			}
 
+			// 通知node上一批从Ready拿出来的消息已经处理完成，应用完上一批从Ready的消息都应该调用Advance
 			s.n.Advance()
 		}
 	}

@@ -107,14 +107,16 @@ func (v *VolumeMgr) finishLastCreateJob(ctx context.Context) error {
 	return nil
 }
 
-// 1. alloc vid
-// 2. initial volume unit basic info
-// 3. save volume and unit info into transited table(raft propose)
-// 4. alloc chunks for volume, return if failed (the rest jobs will be finished by finishLastCreateJob)
-// 5. raft propose apply create volume if 4 step success
+// 生成卷的步骤：
+// 1. alloc vid：分配卷唯一vid，vid从scopeMgr的scopeTbl单调递增分配
+// 2. initial volume unit basic info：vuid = 卷id vid(32) + 索引idx(8) + 版本号epoch(24)
+// 3. save volume and unit info into transited table(raft propose)：通过raft持久化保存vid和vuid的信息
+// 4. alloc chunks for volume, return if failed (the rest jobs will be finished by finishLastCreateJob)：给vuid分配实际的chunk
+// 5. raft propose apply create volume if 4 steps success
 // 6. success and return
 func (v *VolumeMgr) createVolume(ctx context.Context, mode codemode.CodeMode) error {
 	span := trace.SpanFromContextSafe(ctx)
+	// 请求scopeMgr获取vid
 	_, newVid, err := v.scopeMgr.Alloc(ctx, vidScopeName, 1)
 	if err != nil {
 		return errors.Info(err, "scope alloc vid failed").Detail(err)
@@ -126,24 +128,27 @@ func (v *VolumeMgr) createVolume(ctx context.Context, mode codemode.CodeMode) er
 	}
 	span, ctx = trace.StartSpanFromContextWithTraceID(ctx, "", span.TraceID()+"/"+vid.ToString())
 
-	unitCount := v.getModeUnitCount(mode)
+	unitCount := v.getModeUnitCount(mode) // 当前CodeMode下的卷单元数量 = CodeMode对应的条带单元数量
+	// 卷单元基本信息
 	vuInfos := make([]*clustermgr.VolumeUnitInfo, unitCount)
 	for index := 0; index < unitCount; index++ {
+		// 逻辑概念vuid = 卷id vid(32位) + 索引idx(8位) + 版本号epoch(24位)，vuidPrefix永远不会变，vuid对应着一个chunkid
 		vuid := proto.EncodeVuid(proto.EncodeVuidPrefix(vid, uint8(index)), proto.MinEpoch)
 		vuInfos[index] = &clustermgr.VolumeUnitInfo{
-			DiskID: proto.InvalidDiskID,
+			DiskID: proto.InvalidDiskID, // 此时DiskID是InvalidDiskID
 			Free:   v.ChunkSize,
 			Total:  v.ChunkSize,
 			Vuid:   vuid,
 		}
 	}
 
+	// 卷基本信息
 	volInfo := clustermgr.VolumeInfoBase{
 		Vid:            vid,
 		CodeMode:       mode,
 		HealthScore:    healthiestScore,
 		Status:         proto.VolumeStatusIdle,
-		Free:           v.ChunkSize * uint64(v.codeMode[mode].tactic.N),
+		Free:           v.ChunkSize * uint64(v.codeMode[mode].tactic.N), // 数据块个数对应着chunk数
 		Total:          v.ChunkSize * uint64(v.codeMode[mode].tactic.N),
 		CreateByNodeID: v.raftServer.Status().Id,
 	}
@@ -155,6 +160,7 @@ func (v *VolumeMgr) createVolume(ctx context.Context, mode codemode.CodeMode) er
 	span.Debugf("create volume, code mode[%d], create volume context[%+v]", mode, createVolCtx)
 
 	// save volume and unit info into transited table(raft propose)
+	// 通过raft将卷生成信息持久化在临时数据过度表transited table里面
 	data, _ := createVolCtx.Encode()
 	proposeInfo := base.EncodeProposeInfo(v.GetModuleName(), OperTypeInitCreateVolume, data, base.ProposeContext{ReqID: span.TraceID()})
 	if err := v.raftServer.Propose(ctx, proposeInfo); err != nil {
@@ -162,6 +168,7 @@ func (v *VolumeMgr) createVolume(ctx context.Context, mode codemode.CodeMode) er
 	}
 
 	// alloc chunk for all units
+	// 请求diskMgr给卷单元vuid分配实际的chunk文件
 	err = v.allocChunkForAllUnits(ctx, createVolCtx)
 	if err != nil {
 		return errors.Info(err, fmt.Sprintf("alloc chunk for volume[%d] unit failed", vid)).Detail(err)
@@ -172,6 +179,7 @@ func (v *VolumeMgr) createVolume(ctx context.Context, mode codemode.CodeMode) er
 	if err != nil {
 		return errors.Info(err, fmt.Sprintf("encode create volume[%d] context failed", vid)).Detail(err)
 	}
+	// 通过raft将卷生成的信息同步到其他节点
 	proposeInfo = base.EncodeProposeInfo(v.GetModuleName(), OperTypeCreateVolume, data, base.ProposeContext{ReqID: span.TraceID()})
 	if err := v.raftServer.Propose(ctx, proposeInfo); err != nil {
 		return errors.Info(err, fmt.Sprintf("raft propose create volume[%d] failed", vid)).Detail(err)
@@ -246,12 +254,12 @@ func (v *VolumeMgr) allocChunkForAllUnits(ctx context.Context, vol *CreateVolume
 	if !ok {
 		return errors.New("volumeMgr codeMode not set")
 	}
-	idcCnt := codeInfo.tactic.AZCount
+	idcCnt := codeInfo.tactic.AZCount // 每个CodeMode都有对应的az数量
 	// codeMode EC15P12 return {{0, 1, 2, 3, 4, 15, 16, 17, 18}, {5, 6, 7, 8, 9, 19, 20, 21, 22}, {10, 11, 12, 13, 14, 23, 24, 25, 26}}
-	idcIndexes := codeInfo.tactic.GetECLayoutByAZ()
+	idcIndexes := codeInfo.tactic.GetECLayoutByAZ() // 获取codeMode对应的shard在每个az的布局
 	// random shuffle idcIndexs:avoid index{0, 1, 2, 3, 4, 15, 16, 17, 18} only alloc chunk in z0
 	rand.Seed(time.Now().UnixNano())
-	rand.Shuffle(len(idcIndexes), func(i, j int) {
+	rand.Shuffle(len(idcIndexes), func(i, j int) { // 打散az间的布局，避免第一个布局idcIndexes[0]远在idc[0]
 		idcIndexes[i], idcIndexes[j] = idcIndexes[j], idcIndexes[i]
 	})
 	span.Debugf("now idcIndexes is %#v", idcIndexes)
@@ -263,7 +271,7 @@ func (v *VolumeMgr) allocChunkForAllUnits(ctx context.Context, vol *CreateVolume
 		}
 		availableIDC = append(availableIDC, v.IDC[i])
 	}
-	if len(availableIDC) != idcCnt {
+	if len(availableIDC) != idcCnt { // 可用的idc数量要和codeMode的idcCnt相等
 		span.Errorf("available idc count:%d not match codeMode idc count:%d", len(availableIDC), idcCnt)
 		return errors.New("available idc count not match codeMode idc count")
 	}
@@ -272,9 +280,9 @@ func (v *VolumeMgr) allocChunkForAllUnits(ctx context.Context, vol *CreateVolume
 	wg := sync.WaitGroup{}
 	wg.Add(idcCnt)
 	for i, indexs := range idcIndexes {
-		idcVuInfos := make(map[proto.VuidPrefix]*clustermgr.VolumeUnitInfo)
-		for _, index := range indexs {
-			vuInfo := vol.VuInfos[index]
+		idcVuInfos := make(map[proto.VuidPrefix]*clustermgr.VolumeUnitInfo) // vuidPrefix <--> vuidInfo
+		for _, index := range indexs {                                      // EC15P12的情况，index会把[0,26]都遍历完
+			vuInfo := vol.VuInfos[index] // 卷单元的index和codeMode布局的index相等
 			idcVuInfos[vuInfo.Vuid.VuidPrefix()] = vol.VuInfos[index]
 		}
 
@@ -282,6 +290,7 @@ func (v *VolumeMgr) allocChunkForAllUnits(ctx context.Context, vol *CreateVolume
 		span.Debugf("start alloc chunk for volume unit,volume is %#v", vol)
 		go func(ctx context.Context, idc string, idcUnits map[proto.VuidPrefix]*clustermgr.VolumeUnitInfo) {
 			defer wg.Done()
+			// 请求diskMgr给每个idc的卷单元分配diskID
 			err := v.allocChunkForIdcUnits(ctx, idc, idcVuInfos)
 			span.Debugf("alloc chunk in idc:%v, error is %#v", idc, err)
 			errChan <- err
@@ -308,6 +317,7 @@ func (v *VolumeMgr) allocChunkForIdcUnits(ctx context.Context, idc string, vuInf
 	for _, vuInfo := range vuInfos {
 		vuids = append(vuids, vuInfo.Vuid)
 	}
+	// diskMgr的分配策略输入
 	policy := &diskmgr.AllocPolicy{
 		Idc:   idc,
 		Vuids: vuids,
@@ -320,6 +330,7 @@ func (v *VolumeMgr) allocChunkForIdcUnits(ctx context.Context, idc string, vuInf
 			disks     []proto.DiskID
 			failVuids []proto.Vuid
 		)
+		// 分配一批可用的diskID
 		disks, err = v.diskMgr.AllocChunks(ctx, policy)
 		span.Debugf("alloc chunks, policy is %v, actives disk is %v, error is %v", policy, disks, err)
 		// no enough space error return directly, do not retry.
@@ -335,6 +346,7 @@ func (v *VolumeMgr) allocChunkForIdcUnits(ctx context.Context, idc string, vuInf
 				failVuids = append(failVuids, newVuid)
 				continue
 			}
+			// 请求diskMgr拿到diskID对应的blobNode信息
 			diskInfo, err := v.diskMgr.GetDiskInfo(ctx, disks[i])
 			if err != nil {
 				span.Errorf("allocated disk ,get diskInfo [diskID:%d] error:%v", disks[i], err)

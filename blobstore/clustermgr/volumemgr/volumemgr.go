@@ -710,7 +710,8 @@ func (v *VolumeMgr) applyAdminUpdateVolumeUnit(ctx context.Context, unitInfo *cm
 	return err
 }
 
-// only leader node can create volume and check expire volume
+// only leader node can create volume and check expired volume
+// 后台任务：生成空闲卷任务和过期卷核验任务
 func (v *VolumeMgr) loop() {
 	// notify to create volume
 
@@ -718,7 +719,7 @@ func (v *VolumeMgr) loop() {
 
 	if v.raftServer.IsLeader() {
 		select {
-		case v.createVolChan <- struct{}{}:
+		case v.createVolChan <- struct{}{}: // 发送信号，通知后台开启卷生成任务
 			span.Debugf("notify create volume")
 		default:
 
@@ -730,9 +731,10 @@ func (v *VolumeMgr) loop() {
 
 	for {
 		select {
-		case <-v.createVolChan:
+		case <-v.createVolChan: // 收到开始卷生成任务的信号
 			// finish last create volume job firstly
 			// return and wait for create volume channel if any failed
+			// todo 这里是干嘛
 			if err := v.finishLastCreateJob(ctx); err != nil {
 				span.Errorf("finish last create volume job failed ==> %s", errors.Detail(err))
 				continue
@@ -744,8 +746,8 @@ func (v *VolumeMgr) loop() {
 			span_, ctx_ := trace.StartSpanFromContext(context.Background(), "")
 			span_.Debug("leader node start create volume")
 
-			allocatableVolCounts := v.allocator.StatAllocatable()
-			diskNums := v.diskMgr.Stat(ctx_).TotalDisk
+			allocatableVolCounts := v.allocator.StatAllocatable() // 每个CodeMode模式下idle空闲卷中可分配卷的数量
+			diskNums := v.diskMgr.Stat(ctx_).TotalDisk            // 集群磁盘总量
 
 		CREATE:
 			for _, modeConfig := range v.codeMode {
@@ -754,13 +756,14 @@ func (v *VolumeMgr) loop() {
 					continue
 				}
 
-				count := v.getModeUnitCount(modeConfig.mode)
+				count := v.getModeUnitCount(modeConfig.mode) // 当前CodeMode模式所需要的卷单元数量
+				// 卷基准数量的含义：每块disk只属于一个卷单元，保守策略下得到的一个卷数量，所以可分配的数量应该大于其。
 				minVolCount := int(float64(diskNums) * modeConfig.sizeRatio / float64(count))
 				if minVolCount < v.MinAllocableVolumeCount {
 					minVolCount = v.MinAllocableVolumeCount
 				}
 
-				curVolCount := allocatableVolCounts[modeConfig.mode]
+				curVolCount := allocatableVolCounts[modeConfig.mode] // 当前CodeMode模式下可分配卷的数量
 				span_.Debugf("code mode %v,min allocatable volume count is %d, current count is %d", modeConfig.mode, v.MinAllocableVolumeCount, curVolCount)
 				for i := curVolCount; i < minVolCount; i++ {
 					select {
@@ -769,6 +772,7 @@ func (v *VolumeMgr) loop() {
 					default:
 					}
 
+					// 创建当前CodeMode下的idle空闲卷，生成卷(预分配卷)的核心逻辑
 					err := v.createVolume(ctx, modeConfig.mode)
 					if err != nil {
 						span_.Errorf("create volume failed ==> %s", errors.Detail(err))

@@ -420,11 +420,12 @@ func (d *DiskMgr) ListDroppingDisk(ctx context.Context) ([]*blobnode.DiskInfo, e
 // AllocChunk return available chunks in data center
 func (d *DiskMgr) AllocChunks(ctx context.Context, policy *AllocPolicy) (ret []proto.DiskID, err error) {
 	span, ctx := trace.StartSpanFromContextWithTraceID(ctx, "AllocChunks", trace.SpanFromContextSafe(ctx).TraceID()+"/"+policy.Idc)
+	// 拿到当前idc的allocator
 	v := d.allocators[policy.Idc].Load()
 	if v == nil {
 		return nil, ErrNoEnoughSpace
 	}
-	allocator := v.(*idcStorage)
+	allocator := v.(*idcStorage) // diskMgr.allocator后台会定期刷新可用的diskId列表
 
 	var excludes map[proto.DiskID]*diskItem
 	if len(policy.Excludes) > 0 {
@@ -434,6 +435,8 @@ func (d *DiskMgr) AllocChunks(ctx context.Context, policy *AllocPolicy) (ret []p
 		}
 	}
 
+	// 申请一批vuid的chunk，排除特定的diskId
+	// todo 这里面DiskMgr具体的分配逻辑和后台刷新策略还没看
 	ret, err = allocator.alloc(ctx, len(policy.Vuids), excludes)
 	if err != nil {
 		return

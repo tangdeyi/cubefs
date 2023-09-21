@@ -99,6 +99,12 @@ func (vol *volume) canInsert() bool {
 	return vol.volInfoBase.Status == proto.VolumeStatusIdle
 }
 
+/*
+判断一个卷是否是allocatable可分配的，需要同时满足以下条件：
+1、卷属于idle状态
+2、卷可用空间free大于allocatableSize可分配空间
+3、卷的健康度得分大于allocatableScore可分配
+*/
 func (vol *volume) canAlloc(allocatableSize uint64, allocatableScoreThreshold int) bool {
 	if vol.canInsert() && vol.volInfoBase.Free > allocatableSize && vol.volInfoBase.HealthScore >= allocatableScoreThreshold {
 		return true

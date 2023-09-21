@@ -203,13 +203,13 @@ type ListVolumeUnitArgs struct {
 }
 
 type VolumeUnitInfo struct {
-	Vuid       proto.Vuid   `json:"vuid"`
-	DiskID     proto.DiskID `json:"disk_id"`
-	Total      uint64       `json:"total"`
-	Free       uint64       `json:"free"`
-	Used       uint64       `json:"used"`
-	Compacting bool         `json:"compact"`
-	Host       string       `json:"host"`
+	Vuid       proto.Vuid   `json:"vuid"`    // 卷单元vuid，底层对应着一个blobNode的chunk
+	DiskID     proto.DiskID `json:"disk_id"` // diskID对应着blobNode实际的一块盘
+	Total      uint64       `json:"total"`   // vuid的总大小
+	Free       uint64       `json:"free"`    // vuid的可用大小
+	Used       uint64       `json:"used"`    // vuid的已用大小
+	Compacting bool         `json:"compact"` // vuid是否在compact
+	Host       string       `json:"host"`    // host对应着vuid所属的blobNode host地址，blobNode存储着vuid到chunkid的映射
 }
 
 type ListVolumeUnitInfos struct {

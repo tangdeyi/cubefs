@@ -91,12 +91,13 @@ func (status VolumeStatus) String() string {
 	return "unknown"
 }
 
+// 卷状态
 const (
-	volumeStatusMin = VolumeStatus(iota)
-	VolumeStatusIdle
-	VolumeStatusActive
-	VolumeStatusLock
-	VolumeStatusUnlocking
+	volumeStatusMin       = VolumeStatus(iota)
+	VolumeStatusIdle      // idle状态
+	VolumeStatusActive    // active状态
+	VolumeStatusLock      // lock状态
+	VolumeStatusUnlocking // unlock状态
 	volumeStatusMax
 )
 

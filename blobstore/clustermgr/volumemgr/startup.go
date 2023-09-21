@@ -98,8 +98,7 @@ func (c *VolumeMgrConfig) checkAndFix() {
 
 // NewVolumeMgr constructs a new volume manager.
 func NewVolumeMgr(conf VolumeMgrConfig, diskMgr diskmgr.DiskMgrAPI, scopeMgr scopemgr.ScopeMgrAPI,
-	configMgr configmgr.ConfigMgrAPI, volumeDB kvstore.KVStore) (*VolumeMgr, error,
-) {
+	configMgr configmgr.ConfigMgrAPI, volumeDB kvstore.KVStore) (*VolumeMgr, error) {
 	_, ctx := trace.StartSpanFromContextWithTraceID(context.Background(), "", "new-volume-mgr")
 	conf.checkAndFix()
 	volumeTable, err := volumedb.OpenVolumeTable(volumeDB)

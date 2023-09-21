@@ -127,8 +127,8 @@ var constCodeMode2Name = map[CodeMode]CodeModeName{
 
 // Tactic constant strategy of one CodeMode
 type Tactic struct {
-	N int
-	M int
+	N int // 数据块
+	M int // 全局校验块
 	// local parity count
 	L int
 	// the count of AZ, access use this for split data shards and parity shards
