@@ -1133,7 +1133,6 @@ func (mw *MetaWrapper) rename_ll(srcParentID uint64, srcName string, dstParentID
 	}
 
 	// create dentry in dst parent
-	status, err = mw.dcreate(dstParentMP, dstParentID, dstName, inode, mode)
 	createReq := &proto.CreateDentryRequest{
 		ParentID: dstParentID,
 		Name:     dstName,
