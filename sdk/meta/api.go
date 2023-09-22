@@ -922,10 +922,13 @@ func (mw *MetaWrapper) txRename_ll(srcParentID uint64, srcName string, dstParent
 		return syscall.ENOENT
 	}
 	// look up for the src ino
-	status, srcInode, srcMode, err := mw.lookup(srcParentMP, srcParentID, srcName)
+	//status, srcInode, srcMode, err := mw.lookupEx(srcParentMP, srcParentID, srcName)
+	status, err, den := mw.lookupEx(srcParentMP, srcParentID, srcName)
 	if err != nil || status != statusOK {
 		return statusToErrno(status)
 	}
+	srcInode := den.Inode
+	srcMode := den.Type
 
 	tx, err = NewRenameTransaction(srcParentMP, srcParentID, srcName, dstParentMP, dstParentID, dstName, mw.TxTimeout)
 	if err != nil {
@@ -978,7 +981,15 @@ func (mw *MetaWrapper) txRename_ll(srcParentID uint64, srcName string, dstParent
 			var newSt int
 			var newErr error
 
-			newSt, newErr = mw.txDcreate(tx, dstParentMP, dstParentID, dstName, srcInode, srcMode, []uint32{})
+			req := &proto.TxCreateDentryRequest{
+				TxInfo:   tx.txInfo,
+				ParentID: dstParentID,
+				Name:     dstName,
+				Inode:    srcInode,
+				Mode:     srcMode,
+				FileId:   den.FileId,
+			}
+			newSt, newErr = mw.txDcreateEx(dstParentMP, req)
 			return newSt, newErr
 		})
 
