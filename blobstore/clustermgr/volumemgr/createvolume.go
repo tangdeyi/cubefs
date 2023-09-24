@@ -160,7 +160,7 @@ func (v *VolumeMgr) createVolume(ctx context.Context, mode codemode.CodeMode) er
 	span.Debugf("create volume, code mode[%d], create volume context[%+v]", mode, createVolCtx)
 
 	// save volume and unit info into transited table(raft propose)
-	// 通过raft将卷生成信息持久化在临时数据过度表transited table里面
+	// 通过raft将卷生成的初始化信息同步到其他节点，并持久化在临时数据过度表transited table里面
 	data, _ := createVolCtx.Encode()
 	proposeInfo := base.EncodeProposeInfo(v.GetModuleName(), OperTypeInitCreateVolume, data, base.ProposeContext{ReqID: span.TraceID()})
 	if err := v.raftServer.Propose(ctx, proposeInfo); err != nil {
@@ -179,7 +179,7 @@ func (v *VolumeMgr) createVolume(ctx context.Context, mode codemode.CodeMode) er
 	if err != nil {
 		return errors.Info(err, fmt.Sprintf("encode create volume[%d] context failed", vid)).Detail(err)
 	}
-	// 通过raft将卷生成的信息同步到其他节点
+	// 通过raft将卷生成的信息同步到其他节点，并持久化到VolumeTable中，添加到可分配卷的列表中
 	proposeInfo = base.EncodeProposeInfo(v.GetModuleName(), OperTypeCreateVolume, data, base.ProposeContext{ReqID: span.TraceID()})
 	if err := v.raftServer.Propose(ctx, proposeInfo); err != nil {
 		return errors.Info(err, fmt.Sprintf("raft propose create volume[%d] failed", vid)).Detail(err)
@@ -229,6 +229,7 @@ func (v *VolumeMgr) applyCreateVolume(ctx context.Context, vol *volume) error {
 	vol.lock.Lock()
 	defer vol.lock.Unlock()
 	// set volume status into idle
+	// 这里设置idle状态会触发defaultVolumeNotifyQueue的回调
 	vol.setStatus(ctx, proto.VolumeStatusIdle)
 
 	unitRecords := volumeUnitsToVolumeUnitRecords(vol.vUnits)

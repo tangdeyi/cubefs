@@ -209,6 +209,7 @@ func (s *raftServer) propose(ctx context.Context, id uint64, entryType pb.EntryT
 		return
 	}
 
+	// 等apply完成再返回
 	return pr.nr.wait(ctx, s.stopc)
 }
 
@@ -353,6 +354,7 @@ func (s *raftServer) raftApply() {
 				snap = ap.snapshot
 				notifies = append(notifies, ap.notifyc)
 			}
+			// 日志在这里被应用到状态机
 			s.applyEntries(entries)
 			s.applySnapshotFinish(snap)
 			s.applyWait.Trigger(s.store.Applied())
@@ -437,9 +439,11 @@ func (s *raftServer) applyEntries(entries []pb.Entry) {
 	}
 
 	if len(pendinsDatas) > 0 {
+		// 应用到状态机
 		if err := s.sm.Apply(pendinsDatas, lastIndex); err != nil {
 			log.Panicf("StateMachine apply error: %v", err)
 		}
+		// notify：apply完成通知调用方(比如propose那里)
 		for i := 0; i < len(prIds); i++ {
 			s.notify(prIds[i], nil)
 		}
@@ -538,12 +542,12 @@ func (s *raftServer) raftStart() {
 			}
 
 			select {
-			case s.applyc <- ap:
+			case s.applyc <- ap: // 发送消息给后台apply协程
 			case <-s.stopc:
 				return
 			}
 
-			// 收到其他node节点的请求，通过transport层，最终调用node.Step()传给raft状态机处理
+			// 发送 Messages 给其他节点，todo 这里是要做什么操作，step的流程不是已经有了广播append的操作
 			if isLeader {
 				s.tr.Send(s.processMessages(rd.Messages))
 			}
@@ -641,6 +645,7 @@ func (s *raftServer) run() {
 				}
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			// Step出错，提醒Propose调用方
 			if err := s.n.Step(ctx, msg); err != nil {
 				for _, nr := range nrs {
 					nr.notify(err)

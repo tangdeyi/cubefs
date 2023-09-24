@@ -972,6 +972,7 @@ func (r *raft) Step(m pb.Message) error {
 		}
 
 	default:
+		// normal情况走这里
 		err := r.step(r, m)
 		if err != nil {
 			return err
@@ -1010,6 +1011,7 @@ func stepLeader(r *raft, m pb.Message) error {
 			}
 		})
 		return nil
+		// propose请求走这里
 	case pb.MsgProp:
 		if len(m.Entries) == 0 {
 			r.logger.Panicf("%x stepped empty MsgProp", r.id)
@@ -1064,9 +1066,11 @@ func stepLeader(r *raft, m pb.Message) error {
 			}
 		}
 
+		// 正常append entry日志的流程
 		if !r.appendEntry(m.Entries...) {
 			return ErrProposalDropped
 		}
+		// 广播其他节点Append
 		r.bcastAppend()
 		return nil
 	case pb.MsgReadIndex:

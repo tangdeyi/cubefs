@@ -345,6 +345,7 @@ func (n *node) run() {
 		case pm := <-propc:
 			m := pm.m
 			m.From = r.id
+			// raft.Node处理step消息的地方
 			err := r.Step(m)
 			if pm.result != nil {
 				pm.result <- err
@@ -473,6 +474,7 @@ func (n *node) stepWithWaitOption(ctx context.Context, m pb.Message, wait bool) 
 		pm.result = make(chan error, 1)
 	}
 	select {
+	// 消息传递到n.propc这个ch
 	case ch <- pm:
 		if !wait {
 			return nil

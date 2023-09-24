@@ -39,14 +39,14 @@ type allocConfig struct {
 }
 
 type idleItem struct {
-	head    *list.List
+	head    *list.List // todo，这里保存head的意义是啥
 	element *list.Element
 }
 
 type idleVolumes struct {
 	m              map[proto.Vid]idleItem
-	allocatable    *list.List // 可分配的
-	notAllocatable *list.List // 不可分配的，空闲卷为啥包含不可分配的
+	allocatable    *list.List // 可分配的卷列表
+	notAllocatable *list.List // 不可分配的卷列表，属于idle空闲卷但是healthScore健康度得分不够或者freeSize可用空间不足
 
 	sync.RWMutex
 }
@@ -112,7 +112,7 @@ func (i *idleVolumes) allocFromOptions(optionalVids []proto.Vid, count int) (suc
 	defer i.Unlock()
 	for _, vid := range optionalVids {
 		if item, ok := i.m[vid]; ok {
-			item.head.Remove(item.element)
+			item.head.Remove(item.element) // 从可分配的卷list中删除
 			delete(i.m, vid)
 			succeed = append(succeed, vid)
 			if len(succeed) >= count {
@@ -181,11 +181,18 @@ func (a *volumeAllocator) VolumeFreeHealthCallback(ctx context.Context, vol *vol
 	return nil
 }
 
-// volume status change event callback, idle change should Insert into volume allocator's idle head
+/*
+volume status change event callback, idle change should Insert into volume allocator's idle head
+以下流程中会触发idle状态设置的回调：
+1、后台生成卷设置idle状态，applyCreateVolume
+
+*/
 func (a *volumeAllocator) VolumeStatusIdleCallback(ctx context.Context, vol *volume) error {
 	span := trace.SpanFromContextSafe(ctx)
+	// 卷可配的健康度得分：负数，PutQuorum - codeMode对应的条带数，含义是最多容忍几个卷单元vuid不可用
 	allocatableScoreThreshold := a.codeModes[vol.volInfoBase.CodeMode].tactic.PutQuorum - a.getShardNum(vol.volInfoBase.CodeMode)
 	span.Debugf("vid: %d set status idle callback, status is %d,free is %d,health is %d", vol.vid, vol.volInfoBase.Status, vol.volInfoBase.Free, vol.volInfoBase.HealthScore)
+	// 判断健康度得分和可用空间是否满足可分配规则，是的话添加到allocatable可分配列表中
 	if vol.canAlloc(a.allocatableSize, allocatableScoreThreshold) {
 		a.idles[vol.volInfoBase.CodeMode].addAllocatable(vol)
 	} else {
@@ -237,18 +244,20 @@ func (a *volumeAllocator) Insert(v *volume, mode codemode.CodeMode) {
 //      2) second minus volume score and retry , each time minus one until volume's score equal to scoreThreshold
 func (a *volumeAllocator) PreAlloc(ctx context.Context, mode codemode.CodeMode, count int) ([]proto.Vid, int) {
 	span := trace.SpanFromContextSafe(ctx)
+	// 拿到当前codeMode下的idle卷（可分配卷）列表
 	idleVolumes := a.idles[mode]
 	if idleVolumes == nil {
 		return nil, 0
 	}
 
-	allIdles := idleVolumes.getAllIdles()
-	availableVolCount := len(allIdles)
+	allIdles := idleVolumes.getAllIdles() // 遍历idle卷的list，转成slice（当可分配卷比较多时，这里的遍历应该是一个比较重的操作）
+	availableVolCount := len(allIdles)    // idle卷的数量
+	// 卷可配的健康度得分：负数，PutQuorum - codeMode对应的条带数，含义是最多容忍几个卷单元vuid不可用
 	allocatableScoreThreshold := a.codeModes[mode].tactic.PutQuorum - a.getShardNum(mode)
 	isEnableDiskLoad := a.isEnableDiskLoad()
 	scoreThreshold := healthiestScore
 	// diskLoadThreshold start half of allocatableDiskLoadThreshold,avoid loop too much times
-	diskLoadThreshold := a.allocatableDiskLoadThreshold / 2
+	diskLoadThreshold := a.allocatableDiskLoadThreshold / 2 // diskLoad的含义是磁盘维度上同时有几个chunk在写，是想做到磁盘维度的负载打散
 	// optionalVids include all volume id which satisfied with our condition(idle/enough free size/health/not over disk load)
 	// all vid will range by health, the more healthier volume will range in front of the optional head
 	optionalVids := make([]proto.Vid, 0)
@@ -260,34 +269,40 @@ RETRY:
 	now := time.Now()
 	for _, volume := range allIdles {
 		volume.lock.RLock()
+		// 可分配[idle && 空间够 && 健康] && (没打开diskLoad || 开了但是没超过diskLoad)
 		if volume.canAlloc(a.allocatableSize, scoreThreshold) && (!isEnableDiskLoad || !a.isOverload(volume.vUnits, diskLoadThreshold)) {
 			optionalVids = append(optionalVids, volume.vid)
 			// only insufficient free size or unhealthy volume move to temporary head,
 			// ignore over diskLoad volume
+			// 空间不足 || 健康度不够，记录到不可分配的卷里面
 		} else if !volume.canAlloc(a.allocatableSize, allocatableScoreThreshold) && volume.canInsert() {
 			idleVolumes.addNotAllocatable(volume)
 		} else {
+			// 开启diskLoad但超过diskLoad的卷，即是健康、空间够的卷，但是负载有点高
 			assignable = append(assignable, volume)
 		}
 		volume.lock.RUnlock()
 
+		// 找到满足allocFactor*count数量要求的optionalVid，allocFactor的含义是多拿一些卷，从中选出最健康/负载最低的
 		if len(optionalVids) >= a.allocFactor*count {
 			break
 		}
 
 		// go to the end, first retry with high disk load volume
 		// second  lower health score volume
+		// 找到最后都没有找到满足条件的卷列表，先重试 high disk load volume，再重试 lower health score volume；即优先保证健康度
 		if index == availableVolCount-1 {
 			span.Infof("assignable volume length is %d", len(assignable))
 			if len(assignable) == 0 {
 				span.Warnf("has no assignable volume,enableDiskLoad:%v,diskLoadThreshold:%d", isEnableDiskLoad, diskLoadThreshold)
 				break
 			}
+			// 先适当放开diskLoad
 			if isEnableDiskLoad && diskLoadThreshold < a.allocatableDiskLoadThreshold {
 				diskLoadThreshold += 1
-			} else if isEnableDiskLoad {
+			} else if isEnableDiskLoad { // 开启了DiskLoad但是已经放松到diskLoadThreshold，还没有找到合适的卷，假装没有开启DiskLoad再走一遍
 				isEnableDiskLoad = false
-			} else if scoreThreshold > allocatableScoreThreshold {
+			} else if scoreThreshold > allocatableScoreThreshold { // 最终没办法再降低健康度要求
 				scoreThreshold -= 1
 			}
 			allIdles = assignable
@@ -299,6 +314,7 @@ RETRY:
 
 	span.Infof("optional vids length is %d, vids is %v", len(optionalVids), optionalVids)
 	if a.isEnableDiskLoad() {
+		// 将这一批optionalVids，优先按照健康度排序，再按照diskLoad来排序
 		optionalVids = a.sortVidByLoad(mode, optionalVids)
 	}
 	ret := idleVolumes.allocFromOptions(optionalVids, count)
@@ -414,6 +430,7 @@ func (a *volumeAllocator) sortVidByLoad(mode codemode.CodeMode, vids []proto.Vid
 			load := 0
 			volume.lock.RLock()
 			diskIDs := make([]proto.DiskID, 0, len(volume.vUnits))
+			// 拿到所有vuid的diskId列表
 			for _, unit := range volume.vUnits {
 				diskIDs = append(diskIDs, unit.vuInfo.DiskID)
 			}
@@ -422,6 +439,7 @@ func (a *volumeAllocator) sortVidByLoad(mode codemode.CodeMode, vids []proto.Vid
 			volume.lock.RUnlock()
 
 			a.actives.RLock()
+			// 遍历diskId列表，累加计算vid粒度的disKload
 			for _, diskID := range diskIDs {
 				load += a.actives.diskLoad[diskID]
 			}
@@ -429,7 +447,7 @@ func (a *volumeAllocator) sortVidByLoad(mode codemode.CodeMode, vids []proto.Vid
 			arrVids = append(arrVids, vidLoad{vid, load, score})
 		}
 	}
-	sort.Sort(arrVids)
+	sort.Sort(arrVids) // 优先按照健康度排序，再按照diskLoad来排序
 	ret = make([]proto.Vid, 0, len(arrVids))
 	for _, arrVid := range arrVids {
 		ret = append(ret, arrVid.vid)

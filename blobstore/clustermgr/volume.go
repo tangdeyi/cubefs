@@ -89,7 +89,9 @@ func (s *Service) VolumeList(c *rpc.Context) {
 	}
 }
 
+// 卷分配的逻辑
 // transport to primary and params check
+// todo 只有主才能响应这个请求吗
 func (s *Service) VolumeAlloc(c *rpc.Context) {
 	ctx := c.Request.Context()
 	span := trace.SpanFromContextSafe(ctx)
@@ -101,6 +103,7 @@ func (s *Service) VolumeAlloc(c *rpc.Context) {
 	span.Debugf("accept VolumeAlloc request, args: %v", args)
 
 	// allocator init, direct return allocated volume back
+	// 初始化IsInit参数用来表示此请求是否为allocator(proxy)的初始化请求，如是则直接返回对应codeMode已分配的卷
 	if args.IsInit {
 		c.RespondJSON(s.VolumeMgr.ListAllocatedVolume(ctx, clientIP(c.Request), args.CodeMode))
 		return
@@ -111,6 +114,7 @@ func (s *Service) VolumeAlloc(c *rpc.Context) {
 		return
 	}
 
+	// 请求参数：请求分配卷的编码模式codeMode和请求分配卷的数量Count
 	ret, err := s.VolumeMgr.AllocVolume(ctx, args.CodeMode, args.Count, clientIP(c.Request))
 	if err != nil {
 		span.Errorf("alloc volume error:%v", err)

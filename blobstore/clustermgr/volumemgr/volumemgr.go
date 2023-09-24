@@ -279,6 +279,7 @@ func (v *VolumeMgr) PreRetainVolume(ctx context.Context, tokens []string, host s
 }
 
 func (v *VolumeMgr) AllocVolume(ctx context.Context, mode codemode.CodeMode, count int, host string) (ret *cm.AllocatedVolumeInfos, err error) {
+	// 参数校验
 	if _, ok := v.codeMode[mode]; !ok {
 		return nil, ErrInvalidCodeMode
 	}
@@ -289,6 +290,7 @@ func (v *VolumeMgr) AllocVolume(ctx context.Context, mode codemode.CodeMode, cou
 	v.pendingEntries.Store(pendingKey, nil)
 	defer v.pendingEntries.Delete(pendingKey)
 
+	// 预分配卷的核心逻辑
 	preAllocVids, diskLoadThreshold := v.allocator.PreAlloc(ctx, mode, count)
 	span.Debugf("preAlloc vids is %v,now disk load is %d", preAllocVids, diskLoadThreshold)
 	defer func() {
@@ -320,10 +322,10 @@ func (v *VolumeMgr) AllocVolume(ctx context.Context, mode codemode.CodeMode, cou
 	}
 
 	allocArgs := &AllocVolumeCtx{
-		Vids:               preAllocVids,
-		Host:               host,
-		PendingAllocVolKey: pendingKey,
-		ExpireTime:         time.Now().Add(time.Second * time.Duration(v.RetainTimeS)).UnixNano(),
+		Vids:               preAllocVids,                                                          // 预分配成功的一批卷
+		Host:               host,                                                                  // proxy的IP
+		PendingAllocVolKey: pendingKey,                                                            // uuid，用来获取raft apply成功后的返回值
+		ExpireTime:         time.Now().Add(time.Second * time.Duration(v.RetainTimeS)).UnixNano(), // 卷过期时间
 	}
 	span.Debugf("alloc volume is %+v", allocArgs)
 	data, err := json.Marshal(allocArgs)
@@ -341,7 +343,8 @@ func (v *VolumeMgr) AllocVolume(ctx context.Context, mode codemode.CodeMode, cou
 		return nil, errors.Info(err, "propose failed").Detail(err)
 	}
 
-	value, _ := v.pendingEntries.Load(pendingKey)
+	// 目前看到的逻辑都是等apply之后才会返回
+	value, _ := v.pendingEntries.Load(pendingKey) // todo 是不是有可能commit成功，但是还没有apply导致这里查到的也是空
 	if value == nil {
 		isAllocSucc = false
 		span.Error("load pending entry error")
@@ -355,6 +358,7 @@ func (v *VolumeMgr) AllocVolume(ctx context.Context, mode codemode.CodeMode, cou
 	}
 
 	// Insert unallocated volume back
+	// 可能有一些卷预分配失败了，重新添加到addAllocatable的list中
 	for _, vid := range preAllocVids {
 		if !allocatedVidM[vid] {
 			volume := v.all.getVol(vid)
@@ -579,6 +583,7 @@ func (v *VolumeMgr) applyAllocVolume(ctx context.Context, vid proto.Vid, host st
 
 	allocatableScoreThreshold := volume.getScoreThreshold()
 	// when propose data, volume status may change , check to ensure volume can alloc,
+	// 再次校验vid卷是否可分配
 	if !volume.canAlloc(v.AllocatableSize, allocatableScoreThreshold) {
 		span.Warnf("volume can not alloc,volume info is %+v", volume.volInfoBase)
 		volume.lock.Unlock()
@@ -587,7 +592,7 @@ func (v *VolumeMgr) applyAllocVolume(ctx context.Context, vid proto.Vid, host st
 
 	token := &token{
 		vid:        volume.vid,
-		tokenID:    proto.EncodeToken(host, volume.vid),
+		tokenID:    proto.EncodeToken(host, volume.vid), // tokenId：proxy.host + vid的编码
 		expireTime: expireTime,
 	}
 	volume.token = token
@@ -595,6 +600,7 @@ func (v *VolumeMgr) applyAllocVolume(ctx context.Context, vid proto.Vid, host st
 	volume.setStatus(ctx, proto.VolumeStatusActive)
 	volRecord := volume.ToRecord()
 	tokenRecord := token.ToTokenRecord()
+	// 卷和token信息持久化到volumeTbl
 	err = v.volumeTbl.PutVolumeAndToken([]*volumedb.VolumeRecord{volRecord}, []*volumedb.TokenRecord{tokenRecord})
 	if err != nil {
 		volume.lock.Unlock()
@@ -711,7 +717,7 @@ func (v *VolumeMgr) applyAdminUpdateVolumeUnit(ctx context.Context, unitInfo *cm
 }
 
 // only leader node can create volume and check expired volume
-// 后台任务：生成空闲卷任务和过期卷核验任务
+// 后台任务：生成空闲卷任务和过期卷核验任务，只有主才能执行后台任务
 func (v *VolumeMgr) loop() {
 	// notify to create volume
 
