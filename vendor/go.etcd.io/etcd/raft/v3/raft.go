@@ -487,6 +487,7 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 			}
 		}
 	}
+	// 将msg追加到msg slice，后续Ready channel会将msg传出来
 	r.send(m)
 	return true
 }

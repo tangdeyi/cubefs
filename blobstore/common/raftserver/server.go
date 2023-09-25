@@ -519,6 +519,7 @@ func (s *raftServer) raftStart() {
 					if m, ok := s.store.GetMember(rd.SoftState.Lead); ok {
 						leaderHost = m.Host
 					}
+					// leader change变更
 					s.sm.LeaderChange(rd.SoftState.Lead, leaderHost)
 				}
 			}
@@ -536,7 +537,7 @@ func (s *raftServer) raftStart() {
 
 			notifyc := make(chan struct{}, 1)
 			ap := apply{
-				entries:  rd.CommittedEntries,
+				entries:  rd.CommittedEntries, // 已经committed到raftStorage的Entries，还没有被apply
 				snapshot: rd.Snapshot,
 				notifyc:  notifyc,
 			}
@@ -547,7 +548,8 @@ func (s *raftServer) raftStart() {
 				return
 			}
 
-			// 发送 Messages 给其他节点，todo 这里是要做什么操作，step的流程不是已经有了广播append的操作
+			// 发送 msg 给其他节点，raft节点的通信都是通过 msg 来的
+			// raft所有的处理都抽象为 msg，最终通过 Step 接口处理
 			if isLeader {
 				s.tr.Send(s.processMessages(rd.Messages))
 			}
