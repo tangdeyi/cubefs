@@ -291,6 +291,8 @@ func (v *VolumeMgr) AllocVolume(ctx context.Context, mode codemode.CodeMode, cou
 	defer v.pendingEntries.Delete(pendingKey)
 
 	// 预分配卷的核心逻辑
+	// 分配卷是真正返回给上层proxy可写的卷，关注diskLoad是为了保证磁盘粒度的负载打散
+	// 创建卷给每个vuid分配chunk时，关注freeChunk数是为了保证整个集群内的chunk打散
 	preAllocVids, diskLoadThreshold := v.allocator.PreAlloc(ctx, mode, count)
 	span.Debugf("preAlloc vids is %v,now disk load is %d", preAllocVids, diskLoadThreshold)
 	defer func() {
@@ -344,7 +346,10 @@ func (v *VolumeMgr) AllocVolume(ctx context.Context, mode codemode.CodeMode, cou
 	}
 
 	// 目前看到的逻辑都是等apply之后才会返回
-	value, _ := v.pendingEntries.Load(pendingKey) // todo 是不是有可能commit成功，但是还没有apply导致这里查到的也是空
+	// 是不是有可能commit成功，但是还没有apply导致这里查到的也是空：不会
+	// 虽然raft状态机层面是commit和apply是异步的，但是上层是通过notify来阻塞等apply成功的
+	value, _ := v.pendingEntries.Load(pendingKey)
+
 	if value == nil {
 		isAllocSucc = false
 		span.Error("load pending entry error")
@@ -597,6 +602,7 @@ func (v *VolumeMgr) applyAllocVolume(ctx context.Context, vid proto.Vid, host st
 	}
 	volume.token = token
 	// set volume status into active, it'll call change status event function
+	// 设置卷状态为active，这里最终会回调volumeAllocator更新状态（主要包括其维护的active卷map和diskLoad）
 	volume.setStatus(ctx, proto.VolumeStatusActive)
 	volRecord := volume.ToRecord()
 	tokenRecord := token.ToTokenRecord()
@@ -740,7 +746,8 @@ func (v *VolumeMgr) loop() {
 		case <-v.createVolChan: // 收到开始卷生成任务的信号
 			// finish last create volume job firstly
 			// return and wait for create volume channel if any failed
-			// todo 这里是干嘛
+			// 因为创建卷是分为多个阶段的：生成vid和vuid、给每个vuid绑定chunk，因此可能会出现中间状态（为vuid绑定chunk的过程中部分失败），
+			// 这种情况需要后续重试将创建卷的任务做完
 			if err := v.finishLastCreateJob(ctx); err != nil {
 				span.Errorf("finish last create volume job failed ==> %s", errors.Detail(err))
 				continue

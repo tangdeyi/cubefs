@@ -91,7 +91,6 @@ func (s *Service) VolumeList(c *rpc.Context) {
 
 // 卷分配的逻辑
 // transport to primary and params check
-// todo 只有主才能响应这个请求吗
 func (s *Service) VolumeAlloc(c *rpc.Context) {
 	ctx := c.Request.Context()
 	span := trace.SpanFromContextSafe(ctx)

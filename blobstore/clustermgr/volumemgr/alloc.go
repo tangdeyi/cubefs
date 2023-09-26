@@ -126,8 +126,8 @@ func (i *idleVolumes) allocFromOptions(optionalVids []proto.Vid, count int) (suc
 type volumeMap map[proto.Vid]*volume
 
 type activeVolumes struct {
-	allocatorVols map[string]volumeMap
-	diskLoad      map[proto.DiskID]int
+	allocatorVols map[string]volumeMap // proxy.host <--> volumeMap
+	diskLoad      map[proto.DiskID]int // diskId <--> diskLoad
 	sync.RWMutex
 }
 

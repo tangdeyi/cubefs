@@ -310,6 +310,7 @@ func (s *Service) Handler(w http.ResponseWriter, req *http.Request, f func(http.
 	status := atomic.LoadUint32(&s.status)
 
 	// forward to leader if current service's status is not normal or method is not GET
+	// 非Normal状态 || (当前节点非leader && 非查询类请求)，转发当前请求给主节点
 	if status != ServiceStatusNormal || (req.Method != http.MethodGet && !s.raftNode.IsLeader()) {
 		s.forwardToLeader(w, req)
 		return

@@ -162,7 +162,7 @@ func (v *VolumeMgr) Apply(ctx context.Context, operTypes []int32, datas [][]byte
 					}
 				}
 				// return allocated volumes
-				// apply的时候将AllocVolume存到map中，这样propose的地方可以拿到这个
+				// apply的时候将AllocVolume存到map中，这样propose的地方可以拿到这个返回值
 				if _, ok := v.pendingEntries.Load(args.PendingAllocVolKey); ok {
 					v.pendingEntries.Store(args.PendingAllocVolKey, &clustermgr.AllocatedVolumeInfos{AllocVolumeInfos: allocVolumeInfos})
 				}

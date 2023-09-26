@@ -436,13 +436,14 @@ func (d *DiskMgr) AllocChunks(ctx context.Context, policy *AllocPolicy) (ret []p
 	}
 
 	// 申请一批vuid的chunk，排除特定的diskId
-	// todo 这里面DiskMgr具体的分配逻辑和后台刷新策略还没看
+	// todo 这里面DiskMgr具体的分配逻辑和后台刷新策略的细节还没看，总体是基于每个diskID free chunk数的彩票算法来的
 	ret, err = allocator.alloc(ctx, len(policy.Vuids), excludes)
 	if err != nil {
 		return
 	}
 
 	// check if allocated result is host aware or disk aware
+	// 机器隔离 / 磁盘隔离
 	if d.HostAware {
 		selectedHost := make(map[string]bool)
 		for i := range ret {
@@ -480,6 +481,7 @@ func (d *DiskMgr) AllocChunks(ctx context.Context, policy *AllocPolicy) (ret []p
 		disk.lock.RUnlock()
 		go func() {
 			defer wg.Done()
+			// 这里是请求blobNode去创建chunk，参数disk、vuid、chunkSize
 			blobNodeErr := d.blobNodeClient.CreateChunk(ctx, host,
 				&blobnode.CreateChunkArgs{DiskID: ret[i], Vuid: policy.Vuids[i], ChunkSize: d.ChunkSize})
 			// record error info and set ret[i] to InvalidDiskID

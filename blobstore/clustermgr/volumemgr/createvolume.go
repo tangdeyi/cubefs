@@ -55,6 +55,7 @@ func (v *VolumeMgr) finishLastCreateJob(ctx context.Context) error {
 				return nil
 			}
 		}
+		// 这里为何要保证nodeId一致：通过nodeId可以天然地将任务分配开了，之前是谁的任务现在就是谁继续做完
 		if rec.CreateByNodeID == v.raftServer.Status().Id {
 			volumeRecs = append(volumeRecs, rec)
 		}
@@ -70,6 +71,8 @@ func (v *VolumeMgr) finishLastCreateJob(ctx context.Context) error {
 				return errors.Info(err, "get transited volume unit failed").Detail(err)
 			}
 			// must increase epoch of volume unit firstly
+			// 为何是更新这么多版本号：版本号加这么多是和创建chunk的重试次数retryTime是对应的，这样blobNode做后台垃圾chunk请求的时候
+			// 就会发现自己的版本号过低（当前此chunk是垃圾数据，可以清理）
 			unitRec.Epoch += IncreaseEpochInterval
 			unitRecs = append(unitRecs, unitRec)
 			volumeUnits = append(volumeUnits, volumeUnitRecordToVolumeUnit(unitRec).vuInfo)
@@ -347,7 +350,7 @@ func (v *VolumeMgr) allocChunkForIdcUnits(ctx context.Context, idc string, vuInf
 				failVuids = append(failVuids, newVuid)
 				continue
 			}
-			// 请求diskMgr拿到diskID对应的blobNode信息
+			// 请求diskMgr拿到diskID对应的diskInfo(blobNode)信息
 			diskInfo, err := v.diskMgr.GetDiskInfo(ctx, disks[i])
 			if err != nil {
 				span.Errorf("allocated disk ,get diskInfo [diskID:%d] error:%v", disks[i], err)

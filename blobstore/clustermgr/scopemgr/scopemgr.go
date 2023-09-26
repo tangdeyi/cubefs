@@ -77,6 +77,8 @@ func (s *ScopeMgr) Alloc(ctx context.Context, name string, count int) (base, new
 	new = s.scopeItems[name]
 	s.lock.Unlock()
 
+	// Current表示当前已经分配出去的ID(包含)，也是这批分配的ID最大值
+	// Base表示当前这批分配的ID起始值(包含)
 	data, err := json.Marshal(&allocCtx{Name: name, Current: new})
 	if err != nil {
 		return
@@ -87,7 +89,7 @@ func (s *ScopeMgr) Alloc(ctx context.Context, name string, count int) (base, new
 		return
 	}
 
-	base = new - uint64(count) + 1
+	base = new - uint64(count) + 1 // 这批次ID [base,new]，双闭区间
 	return
 }
 
