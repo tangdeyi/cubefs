@@ -35,7 +35,7 @@ type volume struct {
 	vUnits        []*volumeUnit
 	volInfoBase   cm.VolumeInfoBase
 	token         *token
-	smallestVUIdx uint8
+	smallestVUIdx uint8 // todo smallestVUIdx含义：vid中最新上报的chunk index
 	lock          sync.RWMutex
 }
 
@@ -154,8 +154,8 @@ func (vol *volume) getScoreThreshold() int {
 // internal volume unit struct
 type volumeUnit struct {
 	vuidPrefix proto.VuidPrefix
-	epoch      uint32
-	nextEpoch  uint32
+	epoch      uint32 // vuid当前对外使用的版本号
+	nextEpoch  uint32 // vuid当前已经分配出去的版本号，最终的状态应该时epoch和nextEpoch相等
 	vuInfo     *cm.VolumeUnitInfo
 }
 

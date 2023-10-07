@@ -185,6 +185,7 @@ func (a *volumeAllocator) VolumeFreeHealthCallback(ctx context.Context, vol *vol
 volume status change event callback, idle change should Insert into volume allocator's idle head
 以下流程中会触发idle状态设置的回调：
 1、后台生成卷设置idle状态，applyCreateVolume
+2、后台校验卷过期任务，applyExpireVolume
 
 */
 func (a *volumeAllocator) VolumeStatusIdleCallback(ctx context.Context, vol *volume) error {
@@ -205,6 +206,7 @@ func (a *volumeAllocator) VolumeStatusIdleCallback(ctx context.Context, vol *vol
 			span.Errorf("decode token error,%s", vol.token.String())
 			return err
 		}
+		// 若之前是active状态，需要将其从volumeAllocator.actives表中移除，并更新其卷单元所在磁盘的diskload
 		a.removeAllocatedVolumes(vol.vid, host)
 	}
 	return nil

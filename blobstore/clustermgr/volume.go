@@ -33,7 +33,7 @@ import (
 )
 
 const (
-	maxReportChunkBodyLength = 1 << 23
+	maxReportChunkBodyLength = 1 << 23 // 8M
 )
 
 func (s *Service) VolumeGet(c *rpc.Context) {
@@ -162,6 +162,7 @@ func clientIP(r *http.Request) string {
 	return ip
 }
 
+// VolumeUpdate 更新卷单元vuid所属的diskID映射
 func (s *Service) VolumeUpdate(c *rpc.Context) {
 	ctx := c.Request.Context()
 	span := trace.SpanFromContextSafe(ctx)
@@ -172,6 +173,7 @@ func (s *Service) VolumeUpdate(c *rpc.Context) {
 	}
 	span.Debugf("accept VolumeUpdate request, args: %v", args)
 
+	// 参数校验
 	err := s.VolumeMgr.PreUpdateVolumeUnit(ctx, args)
 	if err != nil {
 		if err == volumemgr.ErrRepeatUpdateUnit {
@@ -197,6 +199,7 @@ func (s *Service) VolumeUpdate(c *rpc.Context) {
 	}
 }
 
+// VolumeRetain proxy.allocator调用这个接口
 func (s *Service) VolumeRetain(c *rpc.Context) {
 	ctx := c.Request.Context()
 	span := trace.SpanFromContextSafe(ctx)
@@ -207,6 +210,7 @@ func (s *Service) VolumeRetain(c *rpc.Context) {
 	}
 	span.Debugf("accept VolumeRetain request,args: %v,request ip is %v", args, clientIP(c.Request))
 
+	// 参数校验
 	retainVolumes, err := s.VolumeMgr.PreRetainVolume(ctx, args.Tokens, clientIP(c.Request))
 	if err != nil {
 		span.Errorf("retain volume error:%v", err)
@@ -259,9 +263,11 @@ func (s *Service) VolumeUnlock(c *rpc.Context) {
 	c.RespondError(s.VolumeMgr.UnlockVolume(ctx, args.Vid))
 }
 
+// VolumeUnitAlloc scheduler调用该接口分配最新的vuid和对应的disKID
 func (s *Service) VolumeUnitAlloc(c *rpc.Context) {
 	ctx := c.Request.Context()
 	span := trace.SpanFromContextSafe(ctx)
+	// 解析拿到需要重新分配卷单元的vuid
 	args := new(clustermgr.AllocVolumeUnitArgs)
 	if err := c.ParseArgs(args); err != nil {
 		c.RespondError(err)
@@ -317,6 +323,7 @@ func (s *Service) VolumeUnitRelease(c *rpc.Context) {
 	c.RespondError(s.VolumeMgr.ReleaseVolumeUnit(ctx, args.Vuid, args.DiskID, false))
 }
 
+// ChunkReport blobnode定期调用该接口，上报chunk的信息
 func (s *Service) ChunkReport(c *rpc.Context) {
 	ctx := c.Request.Context()
 	span := trace.SpanFromContextSafe(ctx)

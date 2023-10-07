@@ -51,18 +51,21 @@ func (v *VolumeMgr) ListVolumeUnitInfo(ctx context.Context, args *cmapi.ListVolu
 
 func (v *VolumeMgr) AllocVolumeUnit(ctx context.Context, vuid proto.Vuid) (*cmapi.AllocVolumeUnit, error) {
 	span := trace.SpanFromContextSafe(ctx)
+	// 校验vid对用的volume是否存在
 	vid := vuid.Vid()
 	vol := v.all.getVol(vid)
 	if vol == nil {
 		return nil, ErrVolumeNotExist
 	}
 
+	// 校验index是否越界
 	index := vuid.Index()
 	vol.lock.RLock()
 	if index >= uint8(len(vol.vUnits)) {
 		vol.lock.RUnlock()
 		return nil, ErrVolumeUnitNotExist
 	}
+	// nextEpoch可以理解为一种中间状态，卷单元vuid已经分配(走AllocVolumeUnit接口)出的最新版本(但可能当前正在使用的不是这个版本)
 	nextEpoch := vol.vUnits[index].nextEpoch + 1
 	vol.lock.RUnlock()
 
@@ -89,6 +92,7 @@ func (v *VolumeMgr) AllocVolumeUnit(ctx context.Context, vuid proto.Vuid) (*cmap
 	targetDiskID := proto.DiskID(0)
 	vol.lock.RLock()
 	targetDiskID = vol.vUnits[vuid.Index()].vuInfo.DiskID
+	// 排除掉vid中其他vuid所属的diskID（disk隔离）
 	for _, vu := range vol.vUnits {
 		excludes = append(excludes, vu.vuInfo.DiskID)
 	}
@@ -99,6 +103,7 @@ func (v *VolumeMgr) AllocVolumeUnit(ctx context.Context, vuid proto.Vuid) (*cmap
 		return nil, errors.Info(err, "get disk info failed").Detail(err)
 	}
 
+	// idc和原来的diskID保持一致
 	policy := &diskmgr.AllocPolicy{Idc: diskInfo.Idc, Vuids: []proto.Vuid{newVuid.(proto.Vuid)}, Excludes: excludes}
 	allocDiskID, err := v.diskMgr.AllocChunks(ctx, policy)
 	if err != nil {
@@ -110,6 +115,7 @@ func (v *VolumeMgr) AllocVolumeUnit(ctx context.Context, vuid proto.Vuid) (*cmap
 
 func (v *VolumeMgr) PreUpdateVolumeUnit(ctx context.Context, args *cmapi.UpdateVolumeArgs) (err error) {
 	span := trace.SpanFromContextSafe(ctx)
+	// 校验vid对应的volume是否存在
 	vol := v.all.getVol(args.OldVuid.Vid())
 	if vol == nil {
 		return ErrVolumeNotExist
@@ -119,21 +125,25 @@ func (v *VolumeMgr) PreUpdateVolumeUnit(ctx context.Context, args *cmapi.UpdateV
 	defer vol.lock.RUnlock()
 
 	unit := vol.vUnits[args.OldVuid.Index()]
+	// 校验OldVuid.Epoch是否旧于unit.nextEpoch ||  OldVuid和NewVuid同时不匹配epoch
 	if (proto.EncodeVuid(unit.vuidPrefix, unit.epoch) != args.OldVuid &&
 		proto.EncodeVuid(unit.vuidPrefix, unit.epoch) != args.NewVuid) ||
 		unit.nextEpoch < args.OldVuid.Epoch() {
 		span.Errorf("volume's vuid is %v", proto.EncodeVuid(unit.vuidPrefix, unit.epoch))
 		return ErrOldVuidNotMatch
 	}
+	// 校验NewVuid是否匹配nextEpoch
 	if proto.EncodeVuid(unit.vuidPrefix, unit.nextEpoch) != args.NewVuid {
 		span.Errorf("volume's vuid is %v", proto.EncodeVuid(unit.vuidPrefix, unit.nextEpoch))
 		return ErrNewVuidNotMatch
 	}
 	// idempotent retry update volume unit, return success, and do not stat chunk from data node
+	// 请求超时重试幂等，当前的epoch已经等于NewVuid
 	if proto.EncodeVuid(unit.vuidPrefix, unit.epoch) == args.NewVuid {
 		return ErrRepeatUpdateUnit
 	}
 
+	// 校验diskId是否匹配
 	diskInfo, err := v.diskMgr.GetDiskInfo(ctx, args.NewDiskID)
 	if err != nil {
 		span.Errorf("new diskID:%v not exist", args.NewDiskID)
@@ -184,6 +194,7 @@ func (v *VolumeMgr) applyUpdateVolumeUnit(ctx context.Context, newVuid proto.Vui
 
 	vol.lock.Lock()
 
+	// 幂等
 	if vol.vUnits[index].vuInfo.Vuid == newVuid {
 		vol.lock.Unlock()
 		return nil
@@ -191,6 +202,7 @@ func (v *VolumeMgr) applyUpdateVolumeUnit(ctx context.Context, newVuid proto.Vui
 
 	// when apply wal log happened, the next epoch of volume unit in db may larger than args new vuid's epoch
 	// just return nil in this situation
+	// 重放wal日志可能会导致vUnit.nextEpoch大于newVuid.Epoch，即vuid持久化的nextEpoch比wal日志的Epoch新
 	if vol.vUnits[index].nextEpoch > newVuid.Epoch() {
 		span.Debugf("vol nextEpoch: %d bigger than newVuid Epoch : %d", vol.vUnits[index].nextEpoch, newVuid.Epoch())
 		vol.lock.Unlock()
@@ -203,12 +215,14 @@ func (v *VolumeMgr) applyUpdateVolumeUnit(ctx context.Context, newVuid proto.Vui
 		return err
 	}
 
+	// 更新内存中的vuid信息
 	vol.vUnits[index].epoch = newVuid.Epoch()
 	vol.vUnits[index].vuInfo.DiskID = newDiskID
 	vol.vUnits[index].vuInfo.Host = diskInfo.Host
 	vol.vUnits[index].vuInfo.Compacting = false
 	vol.vUnits[index].vuInfo.Vuid = newVuid
 
+	// 持久化到volumeTbl
 	unitRecord := vol.vUnits[index].ToVolumeUnitRecord()
 	err = v.volumeTbl.UpdateVolumeUnit(unitRecord.VuidPrefix, unitRecord)
 	if err != nil {
@@ -218,6 +232,7 @@ func (v *VolumeMgr) applyUpdateVolumeUnit(ctx context.Context, newVuid proto.Vui
 	vol.lock.Unlock()
 
 	// refresh health
+	// vuid对应的chunk更新，刷新volume的健康度
 	err = v.refreshHealth(ctx, vol.vid)
 	if err != nil {
 		span.Errorf("refresh health failed,vid is %d, error is %v", vol.vid, err)
@@ -242,13 +257,13 @@ func (v *VolumeMgr) applyAllocVolumeUnit(ctx context.Context, args *allocVolumeU
 	idx := args.Vuid.Index()
 	vol.lock.Lock()
 	// concurrent alloc volume unit or wal log replay, do nothing and return
-	if vol.vUnits[idx].nextEpoch >= args.NextEpoch {
+	if vol.vUnits[idx].nextEpoch >= args.NextEpoch { // 当前vuid的nextEpoch已经大于请求的nextEpoch
 		vol.lock.Unlock()
 		return
 	}
-	vol.vUnits[idx].nextEpoch = args.NextEpoch
+	vol.vUnits[idx].nextEpoch = args.NextEpoch // 更新nextEpoch
 	vuRecord := vol.vUnits[idx].ToVolumeUnitRecord()
-	err = v.volumeTbl.PutVolumeUnit(args.Vuid.VuidPrefix(), vuRecord)
+	err = v.volumeTbl.PutVolumeUnit(args.Vuid.VuidPrefix(), vuRecord) // 持久化到volumeTbl
 	if err != nil {
 		vol.lock.Unlock()
 		return err
@@ -272,23 +287,27 @@ func (v *VolumeMgr) applyChunkReport(ctx context.Context, chunks *cmapi.ReportCh
 	span := trace.SpanFromContextSafe(ctx)
 
 	for _, chunk := range chunks.ChunkInfos {
+		// 根据vuid拿到vid，再获取到volume信息
 		vol := v.all.getVol(chunk.Vuid.Vid())
 		if vol == nil {
 			span.Warnf("vid not found, vid: %d, vuid: %d", chunk.Vuid.Vid(), chunk.Vuid)
 			continue
 		}
+		// 根据vuid拿到当前chunk的index
 		idx := chunk.Vuid.Index()
 		vol.lock.Lock()
 		// in some case, the report vuid epoch may not equal epoch in cm, like balance, we should just ignore it and do not modify
+		// todo 为何balance期间blobnode上报的epoch不等于cm存储的，可能要看scheduler的逻辑
 		if vol.vUnits[idx].vuInfo.Vuid != chunk.Vuid {
 			vol.lock.Unlock()
 			continue
 		}
-
+		// 修改vuid的free、used、total信息
 		vol.vUnits[idx].vuInfo.Free = chunk.Free
 		vol.vUnits[idx].vuInfo.Used = chunk.Used
 		vol.vUnits[idx].vuInfo.Total = chunk.Total
 
+		// 数据块个数
 		dataChunkNum := uint64(v.codeMode[vol.volInfoBase.CodeMode].tactic.N)
 		volFree := vol.vUnits[idx].vuInfo.Free * dataChunkNum
 		volUsed := vol.vUnits[idx].vuInfo.Used * dataChunkNum
@@ -299,7 +318,7 @@ func (v *VolumeMgr) applyChunkReport(ctx context.Context, chunks *cmapi.ReportCh
 			vol.volInfoBase.Used = volUsed
 			vol.volInfoBase.Total = volTotal
 			vol.smallestVUIdx = idx
-			vol.setFree(ctx, volFree)
+			vol.setFree(ctx, volFree) // freeSize变化会触发volAllocator.VolumeFreeHealthCallback回调，最终可能会添加到可分配卷列表中
 		} else {
 			// ensure volume free size and use size can be update after shard delete or compaction
 			vol.volInfoBase.Used = vol.vUnits[vol.smallestVUIdx].vuInfo.Used * dataChunkNum

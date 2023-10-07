@@ -125,7 +125,7 @@ type VolumeMgr struct {
 	allocator     *volumeAllocator
 	taskMgr       *taskManager
 	lastTaskIdMap sync.Map
-	dirty         atomic.Value
+	dirty         atomic.Value // vid<-->volumeInfo存储volume的信息，通过后台异步flush的方式持久化到volumeTbl
 	applyTaskPool *base.TaskDistribution
 
 	createVolChan chan struct{}
@@ -255,10 +255,11 @@ func (v *VolumeMgr) PreRetainVolume(ctx context.Context, tokens []string, host s
 			errCnt++
 			continue
 		}
+		// 可续租：可用空间大于冻结阈值 && 健康度大于续租健康阈值
 		if vol.canRetain(v.FreezeThreshold, v.RetainThreshold) {
 			retainVolume := cm.RetainVolume{
 				Token:      tok,
-				ExpireTime: time.Now().UnixNano() + int64(time.Duration(v.RetainTimeS)*time.Second),
+				ExpireTime: time.Now().UnixNano() + int64(time.Duration(v.RetainTimeS)*time.Second), // 刷新过期时间
 			}
 			retainVolumes = append(retainVolumes, retainVolume)
 		}
@@ -551,6 +552,7 @@ func (v *VolumeMgr) applyRetainVolume(ctx context.Context, retainVolTokens []cm.
 			TokenID:    retainVol.Token,
 			ExpireTime: retainVol.ExpireTime,
 		}
+		// 更新volume的过期时间，持久化到volumeTbl
 		err = v.volumeTbl.PutToken(vid, tokenRecord)
 		if err != nil {
 			vol.lock.Unlock()
@@ -653,6 +655,7 @@ func (v *VolumeMgr) applyExpireVolume(ctx context.Context, vids []proto.Vid) (er
 		// set volume status idle, it'll call volume status change event function
 		vol.setStatus(ctx, proto.VolumeStatusIdle)
 		volRecord := vol.ToRecord()
+		// 更新vol的状态信息volRecord，并持久化到volumeTbl
 		err = v.volumeTbl.PutVolumeRecord(volRecord)
 		if err != nil {
 			vol.lock.Unlock()
@@ -794,6 +797,7 @@ func (v *VolumeMgr) loop() {
 				}
 			}
 			// check expired volume
+			// 后台校验哪些卷过期了，若过期会将status从active改成idle，并从已经分配队列中删除
 		case <-ticker.C:
 			if !v.raftServer.IsLeader() {
 				continue
