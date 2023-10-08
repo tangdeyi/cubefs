@@ -314,6 +314,7 @@ func (v *VolumeMgr) applyChunkReport(ctx context.Context, chunks *cmapi.ReportCh
 		volTotal := vol.vUnits[idx].vuInfo.Total * dataChunkNum
 
 		// use the minimum free size as volume free
+		// vuids的地位是平等的，但可能会出现不同的vuid有着不同的Free空间，所以取Free空间最小的vuid作为卷的Free空间
 		if vol.volInfoBase.Free > volFree {
 			vol.volInfoBase.Used = volUsed
 			vol.volInfoBase.Total = volTotal

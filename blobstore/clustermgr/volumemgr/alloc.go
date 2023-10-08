@@ -39,7 +39,7 @@ type allocConfig struct {
 }
 
 type idleItem struct {
-	head    *list.List // todo，这里保存head的意义是啥
+	head    *list.List // todo，这里保存head的意义是啥，答：为了更快地删除list的对象吗
 	element *list.Element
 }
 
@@ -186,6 +186,7 @@ volume status change event callback, idle change should Insert into volume alloc
 以下流程中会触发idle状态设置的回调：
 1、后台生成卷设置idle状态，applyCreateVolume
 2、后台校验卷过期任务，applyExpireVolume
+3、解锁卷任务执行完成后清理task信息，applyRemoveVolumeTask
 
 */
 func (a *volumeAllocator) VolumeStatusIdleCallback(ctx context.Context, vol *volume) error {
@@ -228,6 +229,7 @@ func (a *volumeAllocator) VolumeStatusActiveCallback(ctx context.Context, vol *v
 }
 
 // volume status change event callback, lock change should delete from volume allocator's idle head
+// lock volume会触发volumeAllocator将volume从idle列表中移除
 func (a *volumeAllocator) VolumeStatusLockCallback(ctx context.Context, vol *volume) error {
 	a.idles[vol.volInfoBase.CodeMode].delete(vol.vid)
 	return nil

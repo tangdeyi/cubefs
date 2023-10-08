@@ -35,11 +35,12 @@ type indexItem struct {
 }
 
 type VolumeTable struct {
-	volTbl   kvstore.KVTable
-	unitTbl  kvstore.KVTable
-	tokenTbl kvstore.KVTable
-	taskTbl  kvstore.KVTable
-	indexes  map[string]indexItem
+	volTbl   kvstore.KVTable // vid <--> VolumeRecord
+	unitTbl  kvstore.KVTable // vuidPrefix <--> VolumeUnitRecord
+	tokenTbl kvstore.KVTable // vid <--> TokenRecord
+	taskTbl  kvstore.KVTable // vid <--> VolumeTaskRecord
+	// indexes这个表主要是用在前缀迭代查询，比如基于diskID信息，查到其上的vuid信息，有点反向索引的意思
+	indexes map[string]indexItem // diskID: volumeUnitDiskIDIndexCF(DiskID-VuidPrefix <--> VuidPrefix)
 }
 
 type VolumeRecord struct {

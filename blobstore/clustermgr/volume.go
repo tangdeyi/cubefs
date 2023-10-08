@@ -237,6 +237,8 @@ func (s *Service) VolumeRetain(c *rpc.Context) {
 	c.RespondJSON(retainVolumes)
 }
 
+// VolumeLock scheduler均衡前会调用该接口
+// todo scheduler是如何挑选需要均衡的volume的
 func (s *Service) VolumeLock(c *rpc.Context) {
 	ctx := c.Request.Context()
 	span := trace.SpanFromContextSafe(ctx)

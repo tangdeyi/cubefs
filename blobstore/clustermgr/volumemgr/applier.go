@@ -214,6 +214,7 @@ func (v *VolumeMgr) Apply(ctx context.Context, operTypes []int32, datas [][]byte
 			}
 			// retain volume run on random task pool goroutine, it's safe when apply concurrently
 			// todo 这里的并发安全apply具体是指什么问题
+			// 相同的taskId任务是串行执行的，防止出现并发乱序导致apply的结果与预期不符
 			v.applyTaskPool.Run(1, func() {
 				if err = v.applyRetainVolume(taskCtx, args.RetainVolTokens); err != nil {
 					errs[idx] = errors.Info(err, "apply retain volume failed, args: ", args).Detail(err)

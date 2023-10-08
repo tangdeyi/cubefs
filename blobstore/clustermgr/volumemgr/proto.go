@@ -35,7 +35,7 @@ type volume struct {
 	vUnits        []*volumeUnit
 	volInfoBase   cm.VolumeInfoBase
 	token         *token
-	smallestVUIdx uint8 // todo smallestVUIdx含义：vid中最新上报的chunk index
+	smallestVUIdx uint8 // 含义：vid的Free空间是基于哪个chunk index计算的
 	lock          sync.RWMutex
 }
 
@@ -122,6 +122,7 @@ func (vol *volume) canRetain(freezeThreshold uint64, retainThreshold int) bool {
 	return false
 }
 
+// 只有idle状态的volume才可以锁定
 func (vol *volume) canLock() bool {
 	return vol.getStatus() == proto.VolumeStatusIdle
 }

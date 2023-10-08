@@ -33,10 +33,10 @@ type volTask struct {
 	vid      proto.Vid
 	taskType base.VolumeTaskType
 	taskId   string
-	f        func(task *volTask) error
+	f        func(task *volTask) error // task的执行主要是在这里
 	errCnt   uint32
-	expire   time.Time
-	context  []byte
+	expire   time.Time // 这个应该是指task的生效时间，执行task时如果有错误会加一些punish时间
+	context  []byte    // 标识哪些chunk已经修改状态(切只读/读写)成功
 }
 
 func newVolTask(vid proto.Vid, taskType base.VolumeTaskType, taskId string, f func(task *volTask) error) *volTask {
@@ -159,6 +159,7 @@ func (m *taskManager) execTask(task *volTask, done <-chan struct{}) {
 			if task.errCnt < maxErrCnt {
 				task.errCnt++
 			}
+			// 修改chunk状态有部分错误，需要加一些punish时间
 			task.expire = time.Now().Add(time.Second * time.Duration(task.errCnt))
 		}
 		m.reschedule(task) // add task to taskMap and reschedule

@@ -124,8 +124,8 @@ type VolumeMgr struct {
 	all           *shardedVolumes
 	allocator     *volumeAllocator
 	taskMgr       *taskManager
-	lastTaskIdMap sync.Map
-	dirty         atomic.Value // vid<-->volumeInfo存储volume的信息，通过后台异步flush的方式持久化到volumeTbl
+	lastTaskIdMap sync.Map     // vid <--> taskId(VolumeTaskType任务的Id)
+	dirty         atomic.Value // vid <--> volumeInfo存储volume的信息，通过后台异步flush的方式持久化到volumeTbl，主要是用在chunkReport
 	applyTaskPool *base.TaskDistribution
 
 	createVolChan chan struct{}
@@ -292,8 +292,8 @@ func (v *VolumeMgr) AllocVolume(ctx context.Context, mode codemode.CodeMode, cou
 	defer v.pendingEntries.Delete(pendingKey)
 
 	// 预分配卷的核心逻辑
-	// 分配卷是真正返回给上层proxy可写的卷，关注diskLoad是为了保证磁盘粒度的负载打散
-	// 创建卷给每个vuid分配chunk时，关注freeChunk数是为了保证整个集群内的chunk打散
+	// 分配卷AllocVolume是真正返回给上层proxy可写的卷，关注diskLoad是为了保证磁盘粒度的负载打散
+	// 创建卷CreateVolume给每个vuid分配chunk时，关注freeChunk数是为了保证整个集群内的chunk打散
 	preAllocVids, diskLoadThreshold := v.allocator.PreAlloc(ctx, mode, count)
 	span.Debugf("preAlloc vids is %v,now disk load is %d", preAllocVids, diskLoadThreshold)
 	defer func() {
@@ -418,10 +418,12 @@ func (v *VolumeMgr) LockVolume(ctx context.Context, vid proto.Vid) error {
 	vol.lock.RLock()
 	status := vol.getStatus()
 	// volume already locked
+	// 请求超时重试幂等
 	if status == proto.VolumeStatusLock {
 		vol.lock.RUnlock()
 		return nil
 	}
+	// 判断卷状态是否为idle
 	if !vol.canLock() {
 		vol.lock.RUnlock()
 		span.Warnf("can't lock volume, volume %d, current status(%d)", vid, status)
