@@ -312,6 +312,8 @@ func (s *Service) VolumeUnitList(c *rpc.Context) {
 }
 
 // direct use blobnode client release chunk
+// scheduler调用该接口释放chunk，参数vuid、diskId
+// todo 何时调用这个接口，是均衡完成后删除旧的chunk吗
 func (s *Service) VolumeUnitRelease(c *rpc.Context) {
 	ctx := c.Request.Context()
 	span := trace.SpanFromContextSafe(ctx)

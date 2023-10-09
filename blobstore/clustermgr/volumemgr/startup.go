@@ -49,7 +49,8 @@ type VolumeMgrConfig struct {
 	ApplyConcurrency             uint32 `json:"apply_concurrency"`
 	MinAllocableVolumeCount      int    `json:"min_allocable_volume_count"`
 	AllocatableDiskLoadThreshold int    `json:"allocatable_disk_load_threshold"`
-	AllocFactor                  int    `json:"alloc_factor"`
+	// 预分配卷的负载因子，目的是多拿一些volume，一方面可以从中挑选health且diskload低的，再者防止分配卷的过程中出现有些卷已经被分配出去的情况
+	AllocFactor int `json:"alloc_factor"`
 	// the volume free size must big than AllocatableSize can alloc
 	AllocatableSize uint64 `json:"allocatable_size"`
 

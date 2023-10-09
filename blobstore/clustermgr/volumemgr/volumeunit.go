@@ -164,6 +164,7 @@ func (v *VolumeMgr) PreUpdateVolumeUnit(ctx context.Context, args *cmapi.UpdateV
 
 // ReleaseVolumeUnit release old volumeUnit's old chunk
 func (v *VolumeMgr) ReleaseVolumeUnit(ctx context.Context, vuid proto.Vuid, diskID proto.DiskID, force bool) (err error) {
+	// 根据diskId查询diskInfo，主要是为了拿到blobnode的host
 	diskInfo, err := v.diskMgr.GetDiskInfo(ctx, diskID)
 	if err != nil {
 		return errors.Info(err, "get disk info failed").Detail(err)
@@ -171,8 +172,9 @@ func (v *VolumeMgr) ReleaseVolumeUnit(ctx context.Context, vuid proto.Vuid, disk
 	ReleaseChunkArgs := &blobnode.ChangeChunkStatusArgs{
 		DiskID: diskID,
 		Vuid:   vuid,
-		Force:  force,
+		Force:  force, // 是否强制release
 	}
+	// 调用blobnode释放该chunk
 	err = v.blobNodeClient.ReleaseChunk(ctx, diskInfo.Host, ReleaseChunkArgs)
 
 	return
