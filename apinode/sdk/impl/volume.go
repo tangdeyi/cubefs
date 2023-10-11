@@ -594,7 +594,7 @@ func (v *volume) WriteFile(ctx context.Context, ino, off, size uint64, body io.R
 	defer func() {
 		closeErr := v.ec.CloseStream(ino)
 		if closeErr != nil {
-			span.Errorf("close stream failed, ino %s, err %s", ino, closeErr.Error())
+			span.Errorf("close stream failed, ino %d, err %s", ino, closeErr.Error())
 		}
 	}()
 
@@ -606,14 +606,14 @@ func (v *volume) ReadFile(ctx context.Context, ino, off uint64, data []byte) (n 
 	span := trace.SpanFromContextSafe(ctx)
 
 	if err = v.ec.OpenStream(ino); err != nil {
-		span.Errorf("open stream failed, ino %d, off %s, err %s", ino, off, err.Error())
+		span.Errorf("open stream failed, ino %d, off %d, err %s", ino, off, err.Error())
 		return 0, syscallToErr(err)
 	}
 
 	defer func() {
 		closeErr := v.ec.CloseStream(ino)
 		if closeErr != nil {
-			span.Errorf("close stream failed, ino %s, err %s", ino, closeErr.Error())
+			span.Errorf("close stream failed, ino %d, err %s", ino, closeErr.Error())
 		}
 	}()
 
