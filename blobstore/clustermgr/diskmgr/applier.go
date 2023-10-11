@@ -255,6 +255,7 @@ func (d *DiskMgr) Flush(ctx context.Context) error {
 func (d *DiskMgr) NotifyLeaderChange(ctx context.Context, leader uint64, host string) {
 }
 
+// 同一个diskId的任务串行来Apply，不同的则并发来且并发度为ApplyConcurrency
 func (d *DiskMgr) getTaskIdx(diskID proto.DiskID) int {
 	return int(uint32(diskID) % d.ApplyConcurrency)
 }

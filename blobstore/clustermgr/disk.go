@@ -28,6 +28,7 @@ import (
 	"github.com/cubefs/cubefs/blobstore/util/errors"
 )
 
+// DiskIdAlloc blobnode磁盘注册DiskAdd前需要调用该接口给磁盘分配diskId
 func (s *Service) DiskIdAlloc(c *rpc.Context) {
 	ctx := c.Request.Context()
 	span := trace.SpanFromContextSafe(ctx)
@@ -42,9 +43,11 @@ func (s *Service) DiskIdAlloc(c *rpc.Context) {
 	c.RespondJSON(&clustermgr.DiskIDAllocRet{DiskID: diskID})
 }
 
+// DiskAdd blobnode先调用DiskIdAlloc申请diskId，再将磁盘信息包括diskId发送注册请求DiskAdd
 func (s *Service) DiskAdd(c *rpc.Context) {
 	ctx := c.Request.Context()
 	span := trace.SpanFromContextSafe(ctx)
+	// 请求参数为diskInfo
 	args := new(blobnode.DiskInfo)
 	if err := c.ParseArgs(args); err != nil {
 		c.RespondError(err)
@@ -53,16 +56,19 @@ func (s *Service) DiskAdd(c *rpc.Context) {
 	span.Infof("accept DiskAdd request, args: %v", args)
 
 	info, err := s.DiskMgr.GetDiskInfo(ctx, args.DiskID)
+	// 判断diskId是否为重复注册
 	if info != nil && err == nil {
 		span.Warnf("disk already exist, no need to create again, disk info: %v", args)
 		c.RespondError(apierrors.ErrExist)
 		return
 	}
+	// 判断host+path是否为重复注册
 	if s.DiskMgr.CheckDiskInfoDuplicated(ctx, args) {
 		span.Warnf("disk host and path duplicated")
 		c.RespondError(apierrors.ErrIllegalArguments)
 		return
 	}
+	// 判断集群id是否匹配
 	if args.ClusterID != s.ClusterID {
 		span.Warnf("invalid clusterID")
 		c.RespondError(apierrors.ErrIllegalArguments)
@@ -72,12 +78,14 @@ func (s *Service) DiskAdd(c *rpc.Context) {
 		if args.Idc == s.IDC[i] {
 			break
 		}
+		// 判断idc是否找到
 		if i == len(s.IDC)-1 {
 			span.Warnf("invalid idc %s, service idc: %v", args.Idc, s.IDC)
 			c.RespondError(apierrors.ErrIllegalArguments)
 			return
 		}
 	}
+	// 校验注册的diskId，其不可能比当前ScopeMgr中最新的diskId还大
 	current := s.ScopeMgr.GetCurrent(diskmgr.DiskIDScopeName)
 	if proto.DiskID(current) < args.DiskID {
 		span.Warnf("invalid disk_id")
@@ -169,9 +177,11 @@ func (s *Service) DiskList(c *rpc.Context) {
 	c.RespondJSON(ret)
 }
 
+// DiskSet 设置磁盘状态，此接口只允许设置diskStatus为normal/broken/repairing/repaired，不允许设置dropped状态
 func (s *Service) DiskSet(c *rpc.Context) {
 	ctx := c.Request.Context()
 	span := trace.SpanFromContextSafe(ctx)
+	// 参数解析，包括diskId和磁盘状态diskStatus
 	args := new(clustermgr.DiskSetArgs)
 	if err := c.ParseArgs(args); err != nil {
 		c.RespondError(err)
@@ -180,11 +190,13 @@ func (s *Service) DiskSet(c *rpc.Context) {
 	span.Infof("accept DiskSet request, args: %v", args)
 
 	// not allow to set disk dropped in this API
+	// 这个api只允许设置磁盘状态diskStatus为normal/broken/repairing/repaired，不允许设置dropped状态
 	if args.Status < proto.DiskStatusNormal || args.Status >= proto.DiskStatusDropped {
 		c.RespondError(apierrors.ErrInvalidStatus)
 		return
 	}
 
+	// 判断当前diskId是否正在下线dropping，正在下线的disk不允许设置status
 	isDropping, err := s.DiskMgr.IsDroppingDisk(ctx, args.DiskID)
 	if err != nil {
 		c.RespondError(err)
@@ -200,10 +212,12 @@ func (s *Service) DiskSet(c *rpc.Context) {
 		c.RespondError(err)
 		return
 	}
+	// 幂等性校验
 	if diskInfo.Status == args.Status {
 		return
 	}
 
+	// 校验设置磁盘状态的参数
 	err = s.DiskMgr.SetStatus(ctx, args.DiskID, args.Status, false)
 	if err != nil {
 		span.Errorf("disk set failed =>", errors.Detail(err))
@@ -226,12 +240,14 @@ func (s *Service) DiskSet(c *rpc.Context) {
 	}
 
 	// adjust volume health when setting disk broken
+	// 设置坏盘时需要降低其上卷volume的健康度，从而proxy在续租时若volume不满足健康度则不续租
 	if args.Status == proto.DiskStatusBroken {
 		err = s.VolumeMgr.DiskWritableChange(ctx, args.DiskID)
 		c.RespondError(err)
 	}
 }
 
+// DiskDrop 触发磁盘下线，管控面调用该接口下线磁盘，scheduler会定时拉取待下线列表做数据迁移，迁移完成的磁盘再走 DiskDropped
 func (s *Service) DiskDrop(c *rpc.Context) {
 	ctx := c.Request.Context()
 	span := trace.SpanFromContextSafe(ctx)
@@ -257,6 +273,7 @@ func (s *Service) DiskDrop(c *rpc.Context) {
 		return
 	}
 	// only normal disk and readonly can add into dropping list
+	// 前置条件校验：只有normal状态且切只读的磁盘才能走磁盘下线，这样做能够和scheduler的后台任务隔离
 	if diskInfo.Status != proto.DiskStatusNormal || !diskInfo.Readonly {
 		c.RespondError(apierrors.ErrDiskAbnormalOrNotReadOnly)
 		return
@@ -276,6 +293,7 @@ func (s *Service) DiskDrop(c *rpc.Context) {
 	}
 }
 
+// DiskDropped scheduler完成待下线磁盘的数据迁移后会调用该接口
 func (s *Service) DiskDropped(c *rpc.Context) {
 	ctx := c.Request.Context()
 	span := trace.SpanFromContextSafe(ctx)
@@ -291,11 +309,13 @@ func (s *Service) DiskDropped(c *rpc.Context) {
 		c.RespondError(err)
 		return
 	}
+	// 幂等性
 	if diskInfo.Status == proto.DiskStatusDropped {
 		return
 	}
 
 	// 1. check disk if dropping
+	// dropped的前置条件是dropping
 	isDropping, err := s.DiskMgr.IsDroppingDisk(ctx, args.DiskID)
 	if err != nil {
 		c.RespondError(err)
@@ -309,11 +329,13 @@ func (s *Service) DiskDropped(c *rpc.Context) {
 	}
 
 	// 2. check if disk's chunk has been remove
+	// 根据diskId拿到其上的vuids列表，scheduler正常走完数据迁移流程，这上面的数据都应该为空
 	volumeUnits, err := s.VolumeMgr.ListVolumeUnitInfo(ctx, &clustermgr.ListVolumeUnitArgs{DiskID: args.DiskID})
 	if err != nil {
 		c.RespondError(err)
 		return
 	}
+	// vuid不为空，不能够下线该diskId
 	if len(volumeUnits) != 0 {
 		span.Warnf("disk: %d still has existing volume unit, %v", args.DiskID, volumeUnits)
 		c.RespondError(apierrors.ErrDroppedDiskHasVolumeUnit)
@@ -419,6 +441,7 @@ func (s *Service) DiskHeartbeat(c *rpc.Context) {
 	}
 }
 
+// DiskAccess 磁盘切只读
 func (s *Service) DiskAccess(c *rpc.Context) {
 	ctx := c.Request.Context()
 	span := trace.SpanFromContextSafe(ctx)
@@ -434,10 +457,12 @@ func (s *Service) DiskAccess(c *rpc.Context) {
 		c.RespondError(err)
 		return
 	}
+	// 幂等性校验
 	if diskInfo.Readonly == args.Readonly {
 		return
 	}
 
+	// 判断磁盘是否正在走下线，正在走下线不允许切只读
 	isDropping, err := s.DiskMgr.IsDroppingDisk(ctx, args.DiskID)
 	if err != nil {
 		c.RespondError(err)
@@ -463,6 +488,7 @@ func (s *Service) DiskAccess(c *rpc.Context) {
 	}
 
 	// adjust volume health when setting disk readonly
+	// 磁盘切只读最终也要影响到其上vuids所属volume的健康度
 	err = s.VolumeMgr.DiskWritableChange(ctx, args.DiskID)
 	if err != nil {
 		span.Error("adjust volume health failed", errors.Detail(err))

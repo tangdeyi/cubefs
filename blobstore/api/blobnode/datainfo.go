@@ -36,8 +36,8 @@ type DiskInfo struct {
 	Rack         string           `json:"rack"`
 	Host         string           `json:"host"`
 	Path         string           `json:"path"`
-	Status       proto.DiskStatus `json:"status"` // normal、broken、repairing、repaired、dropped
-	Readonly     bool             `json:"readonly"`
+	Status       proto.DiskStatus `json:"status"`   // normal、broken、repairing、repaired、dropped
+	Readonly     bool             `json:"readonly"` // 注意：磁盘是否只读不在磁盘的状态链路上
 	CreateAt     time.Time        `json:"create_time"`
 	LastUpdateAt time.Time        `json:"last_update_time"`
 	DiskHeartBeatInfo

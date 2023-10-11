@@ -121,7 +121,7 @@ type DiskMgr struct {
 
 	scopeMgr       scopemgr.ScopeMgrAPI
 	diskTbl        *normaldb.DiskTable
-	droppedDiskTbl *normaldb.DroppedDiskTable
+	droppedDiskTbl *normaldb.DroppedDiskTable // 正在下线的磁盘table，名字叫得有点歧义
 	blobNodeClient blobnode.StorageAPI
 
 	lastFlushTime time.Time
@@ -134,9 +134,9 @@ type DiskMgr struct {
 type diskItem struct {
 	diskID         proto.DiskID
 	info           *blobnode.DiskInfo
-	expireTime     time.Time
-	lastExpireTime time.Time
-	dropping       bool
+	expireTime     time.Time // 当前磁盘心跳的过期时间
+	lastExpireTime time.Time // 上次磁盘心跳的过期时间
+	dropping       bool      // 磁盘是否正在下线
 	lock           sync.RWMutex
 }
 
@@ -147,6 +147,7 @@ func (d *diskItem) isExpire() bool {
 	return time.Since(d.expireTime) > 0
 }
 
+// 不可用：切只读 || 磁盘状态非normal || 磁盘正在下线
 func (d *diskItem) isAvailable() bool {
 	if d.info.Readonly || d.info.Status != proto.DiskStatusNormal || d.dropping {
 		return false
@@ -162,6 +163,9 @@ func (d *diskItem) isWritable() bool {
 	return true
 }
 
+// 只有normal/broken/repairing状态才需要过滤，为啥是这些状态，因为这些状态的disk还在使用？ todo
+// 这里的过滤具体是指注册的时候，是否需要判断磁盘的host+path是重复注册，也就是说repaired/dropped状态的磁盘是不需要判断的
+// 因为这两个状态的磁盘对于volume生命周期已经走完了
 func (d *diskItem) needFilter() bool {
 	return d.info.Status != proto.DiskStatusRepaired && d.info.Status != proto.DiskStatusDropped
 }
@@ -320,6 +324,7 @@ func (d *DiskMgr) IsDiskWritable(ctx context.Context, id proto.DiskID) (bool, er
 	return diskInfo.isWritable(), nil
 }
 
+// SetStatus isCommit如果为false，相当于参数校验，否则即为真正地设置磁盘状态
 func (d *DiskMgr) SetStatus(ctx context.Context, id proto.DiskID, status proto.DiskStatus, isCommit bool) error {
 	var (
 		beforeSeq int
@@ -328,6 +333,7 @@ func (d *DiskMgr) SetStatus(ctx context.Context, id proto.DiskID, status proto.D
 		span      = trace.SpanFromContextSafe(ctx)
 	)
 
+	// 磁盘status设置后的Seq
 	if afterSeq, ok = validSetStatus[status]; !ok {
 		return apierrors.ErrInvalidStatus
 	}
@@ -339,10 +345,12 @@ func (d *DiskMgr) SetStatus(ctx context.Context, id proto.DiskID, status proto.D
 	}
 
 	diskInfo.lock.RLock()
+	// double check status
 	if diskInfo.info.Status == status {
 		diskInfo.lock.RUnlock()
 		return nil
 	}
+	// 磁盘status设置前的Seq
 	beforeSeq, ok = validSetStatus[diskInfo.info.Status]
 	diskInfo.lock.RUnlock()
 	if !ok {
@@ -350,12 +358,14 @@ func (d *DiskMgr) SetStatus(ctx context.Context, id proto.DiskID, status proto.D
 	}
 
 	// can't change status back or change status more than 2 motion
+	// 磁盘状态是单调递增的，不可以往回走 || 磁盘状态是逐级变化的，不可以跳跃（磁盘下线dropped除外，即任何状态都可往前直接走到dropped状态）
 	if beforeSeq > afterSeq || (afterSeq-beforeSeq > 1 && status != proto.DiskStatusDropped) {
 		// return error in pre set request
 		if !isCommit {
 			return apierrors.ErrChangeDiskStatusNotAllow
 		}
 		// return nil in wal log replay situation
+		// 如果是isCommit为true时出现该场景，必为wal log replay，因为同一个diskId的状态设置一定是串行的，不会出现status往回走或者是跳跃的情况
 		return nil
 	}
 
@@ -370,12 +380,14 @@ func (d *DiskMgr) SetStatus(ctx context.Context, id proto.DiskID, status proto.D
 		return nil
 	}
 
+	// 先持久化status到diskTbl
 	err := d.diskTbl.UpdateDiskStatus(id, status)
 	if err != nil {
 		err = errors.Info(err, "diskMgr.SetStatus update disk info failed").Detail(err)
 		span.Error(errors.Detail(err))
 		return err
 	}
+	// 再修改内存信息
 	diskInfo.info.Status = status
 	if !diskInfo.needFilter() {
 		d.hostPathFilter.Delete(diskInfo.genFilterKey())
@@ -563,8 +575,11 @@ func (d *DiskMgr) SwitchReadonly(diskID proto.DiskID, readonly bool) error {
 	diskInfo.lock.Lock()
 	defer diskInfo.lock.Unlock()
 	diskInfo.info.Readonly = readonly
+	// 持久化diskInfo到diskTbl
 	err := d.diskTbl.UpdateDisk(diskID, diskInfoToDiskInfoRecord(diskInfo.info))
 	if err != nil {
+		// 写rocksdb失败回退内存中的diskInfo信息
+		// 这么写其实没啥必要，完全可以写成先持久化，成功后再修改内存信息
 		diskInfo.info.Readonly = !readonly
 		return err
 	}
@@ -612,12 +627,14 @@ func (d *DiskMgr) addDisk(ctx context.Context, info blobnode.DiskInfo) error {
 	d.metaLock.Lock()
 	defer d.metaLock.Unlock()
 	// concurrent double check
+	// 并发场景下的双重校验
 	_, ok = d.allDisks[info.DiskID]
 	if ok {
 		return ErrDiskExist
 	}
 
 	// calculate free and max chunk count
+	// 计算free chunk和max chunk数，将diskInfo持久化到diskTbl
 	info.MaxChunkCnt = info.Size / d.ChunkSize
 	info.FreeChunkCnt = info.MaxChunkCnt - info.UsedChunkCnt
 	err := d.diskTbl.AddDisk(diskInfoToDiskInfoRecord(&info))
@@ -625,9 +642,10 @@ func (d *DiskMgr) addDisk(ctx context.Context, info blobnode.DiskInfo) error {
 		span.Error("diskMgr.addDisk add disk failed: ", err)
 		return errors.Info(err, "diskMgr.addDisk add disk failed").Detail(err)
 	}
+	// 将diskItem信息添加到内存map中，其中包含diskId、diskInfo、expireTime
 	diskItem := &diskItem{diskID: info.DiskID, info: &info, expireTime: time.Now().Add(time.Duration(d.HeartbeatExpireIntervalS) * time.Second)}
 	d.allDisks[info.DiskID] = diskItem
-	d.hostPathFilter.Store(diskItem.genFilterKey(), 1)
+	d.hostPathFilter.Store(diskItem.genFilterKey(), 1) // 标识host+path已经注册了
 
 	return nil
 }
@@ -640,6 +658,7 @@ func (d *DiskMgr) droppingDisk(ctx context.Context, id proto.DiskID) error {
 	}
 
 	disk.lock.RLock()
+	// 幂等性
 	if disk.dropping {
 		disk.lock.RUnlock()
 		return nil
@@ -648,6 +667,7 @@ func (d *DiskMgr) droppingDisk(ctx context.Context, id proto.DiskID) error {
 
 	disk.lock.Lock()
 	defer disk.lock.Unlock()
+	// 将正在下线的diskId持久化到droppedDiskTbl，下线任务完成时需要将此表清理
 	err := d.droppedDiskTbl.AddDroppingDisk(id)
 	if err != nil {
 		return err
@@ -659,25 +679,30 @@ func (d *DiskMgr) droppingDisk(ctx context.Context, id proto.DiskID) error {
 
 // droppedDisk set disk dropped
 func (d *DiskMgr) droppedDisk(ctx context.Context, id proto.DiskID) error {
+	// 因为这个操作本身不频繁且较轻，所以这里直接走rocksdb查询
 	exist, err := d.droppedDiskTbl.IsDroppingDisk(id)
 	if err != nil {
 		return errors.Info(err, "diskMgr.droppedDisk get dropping disk failed").Detail(err)
 	}
 	// concurrent dropped request may cost dropping disk not found, don't return error in this situation
+	// scheduler由于网络等原因重试可能会出现这种情况，不返回错误
 	if !exist {
 		return nil
 	}
 
+	// 从droppedDiskTbl中删除该diskId
 	err = d.droppedDiskTbl.DroppedDisk(id)
 	if err != nil {
 		return errors.Info(err, "diskMgr.droppedDisk dropped disk failed").Detail(err)
 	}
 
+	// 走raft将dropped状态记录下
 	err = d.SetStatus(ctx, id, proto.DiskStatusDropped, true)
 	if err != nil {
 		err = errors.Info(err, "diskMgr.droppedDisk set disk dropped status failed").Detail(err)
 	}
 
+	// CM这个disk map是只增不减的，即使disk已经下线
 	disk, _ := d.getDisk(id)
 	disk.lock.Lock()
 	disk.dropping = false

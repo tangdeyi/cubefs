@@ -386,6 +386,7 @@ func (v *VolumeMgr) AllocVolume(ctx context.Context, mode codemode.CodeMode, cou
 
 func (v *VolumeMgr) DiskWritableChange(ctx context.Context, diskID proto.DiskID) (err error) {
 	span := trace.SpanFromContextSafe(ctx)
+	// 根据diskId反查出其上面的vuid卷单元
 	vuidPrefixes, err := v.volumeTbl.ListVolumeUnit(diskID)
 	if err != nil {
 		return err
@@ -845,11 +846,13 @@ func (v *VolumeMgr) refreshHealth(ctx context.Context, vid proto.Vid) error {
 
 	vol.lock.RLock()
 	for _, vu := range vol.vUnits {
+		// chunk在compact时降低其健康度
 		if vu.vuInfo.Compacting {
 			span.Debugf("disk chunk is compacting, bad index increase. disk_id: %d, vuid: %d", vu.vuInfo.DiskID, vu.vuInfo.Vuid)
 			badCount++
 			continue
 		}
+		// 判断磁盘是否可写，不可写时降低其健康度
 		writable, err := v.diskMgr.IsDiskWritable(ctx, vu.vuInfo.DiskID)
 		if err != nil {
 			vol.lock.RUnlock()

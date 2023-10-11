@@ -89,7 +89,7 @@ func (s *ScopeMgr) Alloc(ctx context.Context, name string, count int) (base, new
 		return
 	}
 
-	base = new - uint64(count) + 1 // 这批次ID [base,new]，双闭区间
+	base = new - uint64(count) + 1 // 这批次ID [base,new]/[base,base+count-1]，双闭区间
 	return
 }
 

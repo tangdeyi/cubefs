@@ -385,6 +385,7 @@ func (v *VolumeMgr) applyDiskWritableChange(ctx context.Context, vuidPrefixes []
 	span.Debugf("refresh vuid list: %v", vuidPrefixes)
 	for _, vuidPrefix := range vuidPrefixes {
 		vid := vuidPrefix.Vid()
+		// 刷新每个volume的健康度
 		err = v.refreshHealth(ctx, vid)
 		if err != nil {
 			return
