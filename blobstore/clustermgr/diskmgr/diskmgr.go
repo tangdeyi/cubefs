@@ -297,6 +297,7 @@ func (d *DiskMgr) IsFrequentHeatBeat(id proto.DiskID, HeartbeatNotifyIntervalS i
 	diskInfo.lock.RLock()
 	defer diskInfo.lock.RUnlock()
 
+	// 该disk刚刚才上报过心跳信息
 	newExpireTime := time.Now().Add(time.Duration(d.HeartbeatExpireIntervalS) * time.Second)
 	if newExpireTime.Sub(diskInfo.expireTime) < time.Duration(HeartbeatNotifyIntervalS)*time.Second {
 		return true, nil
@@ -586,6 +587,7 @@ func (d *DiskMgr) SwitchReadonly(diskID proto.DiskID, readonly bool) error {
 	return nil
 }
 
+// 心跳变化有两种情况：一种是从活跃到离线，还有一种是从离线到活跃
 func (d *DiskMgr) GetHeartbeatChangeDisks() []HeartbeatEvent {
 	all := d.getAllDisk()
 	ret := make([]HeartbeatEvent, 0)
@@ -594,18 +596,23 @@ func (d *DiskMgr) GetHeartbeatChangeDisks() []HeartbeatEvent {
 		disk.lock.RLock()
 		span.Debugf("diskId:%d,expireTime:%v,lastExpireTime:%v", disk.diskID, disk.expireTime, disk.lastExpireTime)
 		// notify topper level when heartbeat expire or heartbeat recover
+		// 判断当前disk的心跳是否已经过期
 		if disk.isExpire() {
+			// disk心跳已经过期
 			span.Warnf("diskId:%d was expired,expireTime:%v,lastExpireTime:%v", disk.diskID, disk.expireTime, disk.lastExpireTime)
 
 			// expired disk has been notified already, then ignore it
+			// disk心跳过期时间超过两个心跳周期，忽略因为之前已经处理过
 			if time.Since(disk.expireTime) >= 2*time.Duration(d.HeartbeatExpireIntervalS)*time.Second {
 				disk.lock.RUnlock()
 				continue
 			}
+			// disk心跳过期时间小于两个心跳周期，添加到过期disk列表中
 			ret = append(ret, HeartbeatEvent{DiskID: disk.diskID, IsAlive: false})
 			disk.lock.RUnlock()
 			continue
 		}
+		// disk心跳没有过期，但disk两次心跳过期时间大于心跳周期(说明该disk是重新恢复心跳)，添加到活跃disk列表中
 		if disk.expireTime.Sub(disk.lastExpireTime) > 1*time.Duration(d.HeartbeatExpireIntervalS)*time.Second {
 			ret = append(ret, HeartbeatEvent{DiskID: disk.diskID, IsAlive: true})
 		}
@@ -727,6 +734,7 @@ func (d *DiskMgr) heartBeatDiskInfo(ctx context.Context, infos []*blobnode.DiskH
 		}
 		// memory modify disk heartbeat info, dump into db timely
 		diskInfo.lock.Lock()
+		// 修改CM维护的diskInfo，后续会被定期Flush到rocksdb
 		diskInfo.info.Free = info.Free
 		diskInfo.info.Size = info.Size
 		diskInfo.info.Used = info.Used

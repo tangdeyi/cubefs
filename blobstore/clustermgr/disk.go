@@ -380,9 +380,12 @@ func (s *Service) DiskDroppingList(c *rpc.Context) {
 	c.RespondJSON(ret)
 }
 
+// DiskHeartbeat blobnode通过disk/heartbeat接口上报本机所有disk的信息(主要是disk空间和chunk数)到CM，
+// CM将[diskId、diskStatus、Readonly]响应给blobnode
 func (s *Service) DiskHeartbeat(c *rpc.Context) {
 	ctx := c.Request.Context()
 	span := trace.SpanFromContextSafe(ctx)
+	// 解析blobnode上报的本机所有disk信息
 	args := new(clustermgr.DisksHeartbeatArgs)
 	if err := c.ParseArgs(args); err != nil {
 		c.RespondError(err)
@@ -405,6 +408,7 @@ func (s *Service) DiskHeartbeat(c *rpc.Context) {
 		}
 
 		// filter frequentHeatBeat disk
+		// 剔除掉那些在心跳周期内刚刚上报过的disk，没必要再走一次raft将这些disk信息保存下来
 		frequentHeatBeat, err := s.DiskMgr.IsFrequentHeatBeat(args.Disks[i].DiskID, s.HeartbeatNotifyIntervalS)
 		if err != nil {
 			span.Errorf("get disk info %d failed, err: %v", args.Disks[i].DiskID, err)
@@ -462,7 +466,7 @@ func (s *Service) DiskAccess(c *rpc.Context) {
 		return
 	}
 
-	// 判断磁盘是否正在走下线，正在走下线不允许切只读
+	// 判断磁盘是否正在走下线，正在走下线不允许切只读，因为已经在走下线了，切只读也没啥意义
 	isDropping, err := s.DiskMgr.IsDroppingDisk(ctx, args.DiskID)
 	if err != nil {
 		c.RespondError(err)

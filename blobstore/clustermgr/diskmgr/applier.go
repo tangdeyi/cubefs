@@ -170,6 +170,7 @@ func (d *DiskMgr) Apply(ctx context.Context, operTypes []int32, datas [][]byte, 
 				continue
 			}
 			// disk heartbeat has no necessary to run in single goroutine, so we just put it on random goroutine
+			// 因为这里只涉及到内存信息diskInfo修改，而内存信息修改是会加锁的，不存在并发安全问题
 			d.taskPool.Run(rand.Intn(int(d.ApplyConcurrency)), func() {
 				errs[idx] = d.heartBeatDiskInfo(taskCtx, args.Disks)
 				wg.Done()
