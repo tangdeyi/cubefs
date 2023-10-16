@@ -99,11 +99,31 @@ func (m *metadataManager) getPacketLabels(p *Packet) (labels map[string]string) 
 	return
 }
 
+func enableAudit(opCode uint8) bool {
+	switch opCode {
+	case proto.OpMetaDeleteDentry,
+		proto.OpMetaUnlinkInode,
+		proto.OpMetaUpdateDentry,
+		proto.OpMetaCreateDentry,
+		// TX OP
+		proto.OpMetaTxDeleteDentry,
+		proto.OpMetaTxUnlinkInode,
+		proto.OpMetaTxUpdateDentry,
+		proto.OpMetaTxCreateDentry:
+		return true
+	}
+	return false
+}
+
 // HandleMetadataOperation handles the metadata operations.
 func (m *metadataManager) HandleMetadataOperation(conn net.Conn, p *Packet, remoteAddr string) (err error) {
 	start := time.Now()
 	if log.EnableInfo() {
 		log.LogInfof("HandleMetadataOperation input info op (%s), data %s, remote %s", p.String(), string(p.Data), remoteAddr)
+	}
+
+	if enableAudit(p.Opcode) {
+		log.LogWarnf("Audit: op(%s), req(%s), remote(%s)", p.GetOpMsg(), string(p.Data), remoteAddr)
 	}
 
 	metric := exporter.NewTPCnt(p.GetOpMsg())
