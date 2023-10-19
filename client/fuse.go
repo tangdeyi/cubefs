@@ -27,7 +27,7 @@ import (
 	syslog "log"
 	"net"
 	"net/http"
-	_ "net/http/pprof"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"path"
@@ -95,6 +95,7 @@ const (
 )
 
 var (
+	_                    = pprof.Handler // for import pprof
 	configFile           = flag.String("c", "", "FUSE client config file")
 	configVersion        = flag.Bool("v", false, "show version")
 	configForeground     = flag.Bool("f", false, "run foreground")

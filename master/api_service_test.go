@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
-	_ "net/http/pprof"
+	"net/http/pprof"
 	"os"
 	"strings"
 	"testing"
@@ -64,6 +64,7 @@ const (
 	description = "testUser"
 )
 
+var _ = pprof.Handler // for import pprof
 var server = createDefaultMasterServerForTest()
 var commonVol *Vol
 var cfsUser *proto.UserInfo
@@ -628,11 +629,10 @@ func TestDataPartitionDecommission(t *testing.T) {
 	partition.isRecover = false
 }
 
-//func TestGetAllVols(t *testing.T) {
-//	reqURL := fmt.Sprintf("%v%v", hostAddr, proto.GetALLVols)
-//	process(reqURL, t)
-//}
-//
+//	func TestGetAllVols(t *testing.T) {
+//		reqURL := fmt.Sprintf("%v%v", hostAddr, proto.GetALLVols)
+//		process(reqURL, t)
+//	}
 func TestGetMetaPartitions(t *testing.T) {
 	reqURL := fmt.Sprintf("%v%v?name=%v", hostAddr, proto.ClientMetaPartitions, commonVolName)
 	process(reqURL, t)
