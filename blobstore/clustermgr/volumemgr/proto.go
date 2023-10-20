@@ -84,11 +84,13 @@ func (vol *volume) setStatus(ctx context.Context, status proto.VolumeStatus) {
 	defaultVolumeNotifyQueue.Notify(ctx, volStatusNottifyKeyPrefix+status.String(), vol)
 }
 
+// 设置卷freeSize可写容量，blobnode通过chunkReport上报chunk的空间使用情况，CM再以卷单元最小freeSize计算出卷的可写空间
 func (vol *volume) setFree(ctx context.Context, free uint64) {
 	vol.volInfoBase.Free = free
 	defaultVolumeNotifyQueue.Notify(ctx, VolFreeHealthChangeNotifyKey, vol)
 }
 
+// 设置卷健康度，卷单元更新/上报chunk compact/disk状态改变/disk切只读/disk心跳变化[离线/活跃]
 func (vol *volume) setHealthScore(ctx context.Context, score int) {
 	vol.volInfoBase.HealthScore = score
 	defaultVolumeNotifyQueue.Notify(ctx, VolFreeHealthChangeNotifyKey, vol)

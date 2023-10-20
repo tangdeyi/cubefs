@@ -103,6 +103,7 @@ func (d *blobNodeStorage) allocDisk(ctx context.Context, excludes map[proto.Disk
 	return chosenDisk
 }
 
+// idcStorage前台分配diskId的核心逻辑
 func (s *idcStorage) alloc(ctx context.Context, count int, excludes map[proto.DiskID]*diskItem) ([]proto.DiskID, error) {
 	span := trace.SpanFromContextSafe(ctx)
 	var chosenRacks map[string]int

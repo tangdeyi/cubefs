@@ -92,7 +92,7 @@ func (v *VolumeMgr) AllocVolumeUnit(ctx context.Context, vuid proto.Vuid) (*cmap
 	targetDiskID := proto.DiskID(0)
 	vol.lock.RLock()
 	targetDiskID = vol.vUnits[vuid.Index()].vuInfo.DiskID
-	// 排除掉vid中其他vuid所属的diskID（disk隔离）
+	// 排除掉vid中vuids所属的diskID（disk隔离）
 	for _, vu := range vol.vUnits {
 		excludes = append(excludes, vu.vuInfo.DiskID)
 	}

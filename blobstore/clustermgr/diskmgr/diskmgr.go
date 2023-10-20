@@ -85,10 +85,11 @@ type DiskMgrAPI interface {
 	GetHeartbeatChangeDisks() []HeartbeatEvent
 }
 
+// AllocPolicy 给vuid分配chunk的策略
 type AllocPolicy struct {
-	Idc      string
-	Vuids    []proto.Vuid
-	Excludes []proto.DiskID
+	Idc      string         // vuid所属的idc
+	Vuids    []proto.Vuid   // vuid列表
+	Excludes []proto.DiskID // 分配时排除哪些disk
 }
 
 type HeartbeatEvent struct {
@@ -430,7 +431,8 @@ func (d *DiskMgr) ListDroppingDisk(ctx context.Context) ([]*blobnode.DiskInfo, e
 	return ret, nil
 }
 
-// AllocChunk return available chunks in data center
+// AllocChunks AllocChunk return available chunks in data center
+// 这里是chunk分配的核心逻辑，基本原理是在保证隔离性的前提下，基于彩票算法按照不同disk的freeChunk数来做分配
 func (d *DiskMgr) AllocChunks(ctx context.Context, policy *AllocPolicy) (ret []proto.DiskID, err error) {
 	span, ctx := trace.StartSpanFromContextWithTraceID(ctx, "AllocChunks", trace.SpanFromContextSafe(ctx).TraceID()+"/"+policy.Idc)
 	// 拿到当前idc的allocator

@@ -45,6 +45,7 @@ func (h *maxHeap) Pop() interface{} {
 }
 
 // refresh use for refreshing storage allocator info and cluster statistic info
+// 这里会定期刷新diskInfo到allocator，让allocator感知diskInfo[主要是freeChunk数]的变化，这样allocator在分配chunk时可以做到均衡
 func (d *DiskMgr) refresh(ctx context.Context) {
 	span := trace.SpanFromContextSafe(ctx)
 	// space stat info
@@ -57,7 +58,7 @@ func (d *DiskMgr) refresh(ctx context.Context) {
 		}
 	}
 
-	allDisks := d.getAllDisk()
+	allDisks := d.getAllDisk() // 这里拿到disk都是指针，读取的时候要加RLock
 	span.Info("all disk length: ", len(allDisks))
 
 	blobNodeStgs := make(map[string]*blobNodeStorage)
