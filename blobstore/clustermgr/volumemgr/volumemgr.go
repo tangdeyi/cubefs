@@ -737,7 +737,7 @@ func (v *VolumeMgr) loop() {
 
 	if v.raftServer.IsLeader() {
 		select {
-		case v.createVolChan <- struct{}{}: // 发送信号，通知后台开启卷生成任务
+		case v.createVolChan <- struct{}{}: // 主节点启动时发送信号，通知后台开启卷生成任务
 			span.Debugf("notify create volume")
 		default:
 
@@ -749,7 +749,8 @@ func (v *VolumeMgr) loop() {
 
 	for {
 		select {
-		case <-v.createVolChan: // 收到开始卷生成任务的信号
+		// 收到开始卷生成任务的信号，来源：1、主节点启动时触发，2、主节点PreAlloc分配卷失败，3、所有节点applyAllocVolume
+		case <-v.createVolChan:
 			// finish last create volume job firstly
 			// return and wait for create volume channel if any failed
 			// 因为创建卷是分为多个阶段的：生成vid和vuid、给每个vuid绑定chunk，因此可能会出现中间状态（为vuid绑定chunk的过程中部分失败），

@@ -334,7 +334,7 @@ func (v *VolumeMgr) allocChunkForIdcUnits(ctx context.Context, idc string, vuInf
 			disks     []proto.DiskID
 			failVuids []proto.Vuid
 		)
-		// 分配一批可用的diskID
+		// 分配一批可用的diskID和chunks，这里会调用bn的/chunk/create接口
 		disks, err = v.diskMgr.AllocChunks(ctx, policy)
 		span.Debugf("alloc chunks, policy is %v, actives disk is %v, error is %v", policy, disks, err)
 		// no enough space error return directly, do not retry.

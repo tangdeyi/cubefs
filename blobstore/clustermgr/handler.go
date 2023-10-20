@@ -76,27 +76,27 @@ func NewHandler(service *Service) *rpc.Router {
 	rpc.RegisterArgsParser(&clustermgr.ListVolumeUnitArgs{}, "json")
 	rpc.RegisterArgsParser(&clustermgr.ListAllocatedVolumeArgs{}, "json")
 
-	rpc.GET("/volume/get", service.VolumeGet, rpc.OptArgsQuery())
+	rpc.GET("/volume/get", service.VolumeGet, rpc.OptArgsQuery()) // 获取卷信息，bn、sc、proxy都会调用
 
-	rpc.GET("/volume/list", service.VolumeList, rpc.OptArgsQuery())
+	rpc.GET("/volume/list", service.VolumeList, rpc.OptArgsQuery()) // 列举卷，sc巡检会调用
 
-	rpc.GET("/v2/volume/list", service.V2VolumeList, rpc.OptArgsQuery())
+	rpc.GET("/v2/volume/list", service.V2VolumeList, rpc.OptArgsQuery()) // 列举一批指定status的卷
 
-	rpc.POST("/volume/alloc", service.VolumeAlloc, rpc.OptArgsBody())
+	rpc.POST("/volume/alloc", service.VolumeAlloc, rpc.OptArgsBody()) // 卷分配，proxy调用
 
-	rpc.POST("/volume/update", service.VolumeUpdate, rpc.OptArgsBody())
+	rpc.POST("/volume/update", service.VolumeUpdate, rpc.OptArgsBody()) // sc均衡：3、更新卷单元chunk映射关系
 
-	rpc.POST("/volume/retain", service.VolumeRetain, rpc.OptArgsBody())
+	rpc.POST("/volume/retain", service.VolumeRetain, rpc.OptArgsBody()) // 卷续租，proxy调用
 
-	rpc.POST("/volume/lock", service.VolumeLock, rpc.OptArgsBody())
+	rpc.POST("/volume/lock", service.VolumeLock, rpc.OptArgsBody()) // sc均衡：1、锁卷
 
-	rpc.POST("/volume/unlock", service.VolumeUnlock, rpc.OptArgsBody())
+	rpc.POST("/volume/unlock", service.VolumeUnlock, rpc.OptArgsBody()) //  sc均衡：5、解锁卷，sc均衡完成调用
 
-	rpc.POST("/volume/unit/alloc", service.VolumeUnitAlloc, rpc.OptArgsBody())
+	rpc.POST("/volume/unit/alloc", service.VolumeUnitAlloc, rpc.OptArgsBody()) // sc均衡：2、分配新的卷单元chunk
 
-	rpc.POST("/volume/unit/release", service.VolumeUnitRelease, rpc.OptArgsBody())
+	rpc.POST("/volume/unit/release", service.VolumeUnitRelease, rpc.OptArgsBody()) // sc均衡：4、释放卷单元chunk
 
-	rpc.GET("/volume/unit/list", service.VolumeUnitList, rpc.OptArgsQuery())
+	rpc.GET("/volume/unit/list", service.VolumeUnitList, rpc.OptArgsQuery()) // 获取disk下的所有卷单元，sc后台任务和bn清垃圾chunk会调用
 
 	rpc.GET("/volume/allocated/list", service.VolumeAllocatedList, rpc.OptArgsQuery())
 

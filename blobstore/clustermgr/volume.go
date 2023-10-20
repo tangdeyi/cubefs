@@ -508,6 +508,7 @@ func (s *Service) V2VolumeList(c *rpc.Context) {
 	}
 	// currently, there is no necessary to list all idle volumes
 	// we can use list volume to get all idle volumes
+	// 不允许直接列举idle卷
 	if args.Status == proto.VolumeStatusIdle {
 		c.RespondError(apierrors.ErrNotSupportIdle)
 		return
