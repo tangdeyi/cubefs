@@ -185,6 +185,11 @@ const (
 
 	AddLcNode = "/lcNode/add"
 
+	// Cross Region Replication
+	SetCRR    = "/crr/set"
+	GetCRR    = "/crr/get"
+	DeleteCRR = "/crr/delete"
+
 	QueryDisableDisk = "/dataNode/queryDisableDisk"
 	// Operation response
 	GetMetaNodeTaskResponse = "/metaNode/response" // Method: 'POST', ContentType: 'application/json'
@@ -692,6 +697,7 @@ type LcNodeHeartbeatResponse struct {
 	LcTaskCountLimit      int
 	LcScanningTasks       map[string]*LcNodeRuleTaskResponse
 	SnapshotScanningTasks map[string]*SnapshotVerDelTaskResponse
+	CRRScanningTasks      map[string]*LcNodeCRRTaskResponse
 }
 
 // DeleteFileRequest defines the request to delete a file.
