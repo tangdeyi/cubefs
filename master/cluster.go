@@ -97,6 +97,7 @@ type Cluster struct {
 	lcNodes                      sync.Map
 	lcMgr                        *lifecycleManager
 	snapshotMgr                  *snapshotDelManager
+	CRRMgr                       *CRRMgr
 	DecommissionDiskFactor       float64
 	S3ApiQosQuota                *sync.Map // (api,uid,limtType) -> limitQuota
 }
@@ -339,6 +340,7 @@ func newCluster(name string, leaderInfo *LeaderInfo, fsm *MetadataFsm, partition
 	c.snapshotMgr = newSnapshotManager()
 	c.snapshotMgr.cluster = c
 	c.S3ApiQosQuota = new(sync.Map)
+	c.CRRMgr = newCRRMgr(c)
 	return
 }
 
@@ -363,6 +365,7 @@ func (c *Cluster) scheduleTask() {
 	c.scheduleToCheckDataReplicas()
 	c.scheduleToLcScan()
 	c.scheduleToSnapshotDelVerScan()
+	c.scheduleToCRRScan()
 	c.scheduleToBadDisk()
 }
 
@@ -4286,10 +4289,16 @@ func (c *Cluster) addLcNode(nodeAddr string) (id uint64, err error) {
 	delete(c.lcMgr.lcNodeStatus.WorkingNodes, nodeAddr)
 	c.lcMgr.lcNodeStatus.IdleNodes[nodeAddr] = nodeAddr
 	c.lcMgr.lcNodeStatus.Unlock()
+
 	c.snapshotMgr.lcNodeStatus.Lock()
 	delete(c.snapshotMgr.lcNodeStatus.WorkingNodes, nodeAddr)
 	c.snapshotMgr.lcNodeStatus.IdleNodes[nodeAddr] = nodeAddr
 	c.snapshotMgr.lcNodeStatus.Unlock()
+
+	c.CRRMgr.lcNodeStatus.Lock()
+	delete(c.CRRMgr.lcNodeStatus.WorkingNodes, nodeAddr)
+	c.CRRMgr.lcNodeStatus.IdleNodes[nodeAddr] = nodeAddr
+	c.CRRMgr.lcNodeStatus.Unlock()
 	log.LogInfof("action[addLcNode], clusterID[%v], lcNodeAddr: %v, id: %v, add idleNodes", c.Name, nodeAddr, ln.ID)
 	return ln.ID, nil
 
@@ -4384,6 +4393,27 @@ func (c *Cluster) startLcScan() {
 	c.lcMgr.startLcScan()
 }
 
+func (c *Cluster) scheduleToCRRScan() {
+	go func() {
+		for {
+			if c.partition != nil && c.partition.IsRaftLeader() {
+				c.startCRRScan()
+			}
+		}
+	}()
+}
+
+func (c *Cluster) startCRRScan() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.LogWarnf("startCRRScan occurred panic,err[%v]", r)
+			WarnBySpecialKey(fmt.Sprintf("%v_%v_scheduling_job_panic", c.Name, ModuleName),
+				"startCRRScan occurred panic")
+		}
+	}()
+	c.CRRMgr.startCRRScan()
+}
+
 func (c *Cluster) scheduleToSnapshotDelVerScan() {
 	go c.snapshotMgr.process()
 	//make sure resume all the processing ver deleting tasks before checking
@@ -4452,11 +4482,13 @@ func (c *Cluster) SetBucketLifecycle(req *proto.LcConfiguration) error {
 	log.LogInfof("action[SetS3BucketLifecycle],clusterID[%v] vol:%v", c.Name, lcConf.VolName)
 	return nil
 }
+
 func (c *Cluster) GetBucketLifecycle(VolName string) (lcConf *proto.LcConfiguration) {
 	lcConf = c.lcMgr.GetS3BucketLifecycle(VolName)
 	log.LogInfof("action[GetS3BucketLifecycle],clusterID[%v] vol:%v", c.Name, VolName)
 	return
 }
+
 func (c *Cluster) DelBucketLifecycle(VolName string) {
 	lcConf := &proto.LcConfiguration{
 		VolName: VolName,
