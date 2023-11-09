@@ -16,11 +16,11 @@ type ArgsSnapshot struct {
 func (d *DriveNode) handleCreateSnapshot(c *rpc.Context) {
 	args := &ArgsSnapshot{}
 	ctx, span := d.ctxSpan(c)
-	if d.checkError(c, func(err error) { span.Error(err) }, c.ParseArgs(args), args.Path.Clean()) {
+	if d.checkError(c, func(err error) { span.Error(err) }, c.ParseArgs(args), args.Path.Clean(true)) {
 		return
 	}
 
-	uid := d.userID(c)
+	uid := d.userID(c, nil)
 	ur, vol, err := d.getUserRouterAndVolume(ctx, uid)
 	if d.checkError(c, func(err error) { span.Warn(err) }, err, ur.CanWrite()) {
 		return
@@ -40,11 +40,11 @@ func (d *DriveNode) handleCreateSnapshot(c *rpc.Context) {
 func (d *DriveNode) handleDeleteSnapshot(c *rpc.Context) {
 	args := &ArgsSnapshot{}
 	ctx, span := d.ctxSpan(c)
-	if d.checkError(c, func(err error) { span.Error(err) }, c.ParseArgs(args), args.Path.Clean()) {
+	if d.checkError(c, func(err error) { span.Error(err) }, c.ParseArgs(args), args.Path.Clean(true)) {
 		return
 	}
 
-	uid := d.userID(c)
+	uid := d.userID(c, nil)
 	ur, vol, err := d.getUserRouterAndVolume(ctx, uid)
 	if d.checkError(c, func(err error) { span.Warn(err) }, err, ur.CanWrite()) {
 		return
@@ -62,6 +62,6 @@ func (d *DriveNode) handleDeleteSnapshot(c *rpc.Context) {
 	if info.IsDir() {
 		op = OpDeleteDir
 	}
-	d.out.Publish(ctx, makeOpLog(op, d.requestID(c), d.userID(c), path))
+	d.out.Publish(ctx, makeOpLog(op, d.requestID(c), uid, path))
 	c.Respond()
 }

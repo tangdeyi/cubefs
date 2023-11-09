@@ -38,11 +38,11 @@ type ArgsFileUpload struct {
 func (d *DriveNode) handleFileUpload(c *rpc.Context) {
 	args := new(ArgsFileUpload)
 	ctx, span := d.ctxSpan(c)
-	if d.checkError(c, func(err error) { span.Error(err) }, c.ParseArgs(args), args.Path.Clean()) {
+	if d.checkError(c, func(err error) { span.Error(err) }, c.ParseArgs(args), args.Path.Clean(false)) {
 		return
 	}
 
-	uid := d.userID(c)
+	uid := d.userID(c, &args.Path)
 	ur, vol, err := d.getUserRouterAndVolume(ctx, uid)
 	if d.checkError(c, func(err error) { span.Warn(err) }, err, ur.CanWrite()) {
 		return
@@ -107,11 +107,11 @@ type ArgsFileWrite struct {
 func (d *DriveNode) handleFileWrite(c *rpc.Context) {
 	args := new(ArgsFileWrite)
 	ctx, span := d.ctxSpan(c)
-	if d.checkError(c, func(err error) { span.Error(err) }, c.ParseArgs(args), args.Path.Clean()) {
+	if d.checkError(c, func(err error) { span.Error(err) }, c.ParseArgs(args), args.Path.Clean(true)) {
 		return
 	}
 
-	uid := d.userID(c)
+	uid := d.userID(c, nil)
 	ur, vol, err := d.getUserRouterAndVolume(ctx, uid)
 	if d.checkError(c, func(err error) { span.Warn(err) }, err, ur.CanWrite()) {
 		return
@@ -208,11 +208,11 @@ type ArgsFileVerify struct {
 func (d *DriveNode) handleFileVerify(c *rpc.Context) {
 	args := new(ArgsFileVerify)
 	ctx, span := d.ctxSpan(c)
-	if d.checkError(c, func(err error) { span.Error(err) }, c.ParseArgs(args), args.Path.Clean()) {
+	if d.checkError(c, func(err error) { span.Error(err) }, c.ParseArgs(args), args.Path.Clean(false)) {
 		return
 	}
 
-	uid := d.userID(c)
+	uid := d.userID(c, &args.Path)
 	ur, vol, err := d.getUserRouterAndVolume(ctx, uid)
 	if d.checkError(c, func(err error) { span.Warn(err) }, err) {
 		return
@@ -297,7 +297,7 @@ func (d *DriveNode) downloadConfig(c *rpc.Context) {
 func (d *DriveNode) handleFileDownload(c *rpc.Context) {
 	args := new(ArgsFileDownload)
 	ctx, span := d.ctxSpan(c)
-	if d.checkError(c, func(err error) { span.Error(err) }, c.ParseArgs(args), args.Path.Clean()) {
+	if d.checkError(c, func(err error) { span.Error(err) }, c.ParseArgs(args), args.Path.Clean(false)) {
 		return
 	}
 
@@ -306,7 +306,7 @@ func (d *DriveNode) handleFileDownload(c *rpc.Context) {
 		return
 	}
 
-	uid := d.userID(c)
+	uid := d.userID(c, &args.Path)
 	ur, vol, err := d.getUserRouterAndVolume(ctx, uid)
 	if d.checkError(c, func(err error) { span.Warn(err) }, err) {
 		return
@@ -404,12 +404,20 @@ func (d *DriveNode) handleFileRename(c *rpc.Context) {
 	args := new(ArgsFileRename)
 	ctx, span := d.ctxSpan(c)
 	if d.checkError(c, func(err error) { span.Error(err) },
-		c.ParseArgs(args), args.Src.Clean(), args.Dst.Clean()) {
+		c.ParseArgs(args), args.Src.Clean(false), args.Dst.Clean(false)) {
 		return
 	}
 	span.Info("to rename", args)
 
-	ur, vol, err := d.getUserRouterAndVolume(ctx, d.userID(c))
+	uid := d.userID(c, &args.Src)
+	uidDst := d.userID(c, &args.Dst)
+	if uid != uidDst {
+		span.Warnf("rename between users", uid, uidDst)
+		d.respError(c, sdk.ErrForbidden.Extend("rename between users"))
+		return
+	}
+
+	ur, vol, err := d.getUserRouterAndVolume(ctx, uid)
 	if d.checkError(c, func(err error) { span.Warn(err) }, err, ur.CanWrite()) {
 		return
 	}
@@ -460,7 +468,7 @@ func (d *DriveNode) handleFileRename(c *rpc.Context) {
 	if d.checkError(c, func(err error) { span.Error("rename error", args, err) }, err) {
 		return
 	}
-	d.out.Publish(ctx, makeOpLog(OpRename, d.requestID(c), d.userID(c), string(args.Src), "dst", string(args.Dst)))
+	d.out.Publish(ctx, makeOpLog(OpRename, d.requestID(c), uid, args.Src.String(), "dst", args.Dst.String()))
 	c.Respond()
 }
 
@@ -475,10 +483,18 @@ func (d *DriveNode) handleFileCopy(c *rpc.Context) {
 	args := new(ArgsFileCopy)
 	ctx, span := d.ctxSpan(c)
 	if d.checkError(c, func(err error) { span.Error(err) },
-		c.ParseArgs(args), args.Src.Clean(), args.Dst.Clean()) {
+		c.ParseArgs(args), args.Src.Clean(false), args.Dst.Clean(false)) {
 		return
 	}
 	span.Info("to copy", args)
+
+	uid := d.userID(c, &args.Src)
+	uidDst := d.userID(c, &args.Dst)
+	if uid != uidDst {
+		span.Warnf("copy between users", uid, uidDst)
+		d.respError(c, sdk.ErrForbidden.Extend("copy between users"))
+		return
+	}
 
 	dir, filename := args.Dst.Split()
 	if filename == "" {
@@ -487,7 +503,7 @@ func (d *DriveNode) handleFileCopy(c *rpc.Context) {
 		return
 	}
 
-	ur, vol, err := d.getUserRouterAndVolume(ctx, d.userID(c))
+	ur, vol, err := d.getUserRouterAndVolume(ctx, uid)
 	if d.checkError(c, func(err error) { span.Warn(err) }, err, ur.CanWrite()) {
 		return
 	}
@@ -565,6 +581,6 @@ func (d *DriveNode) handleFileCopy(c *rpc.Context) {
 	if d.checkError(c, func(err error) { span.Error(err) }, err) {
 		return
 	}
-	d.out.Publish(ctx, makeOpLog(OpCopyFile, d.requestID(c), d.userID(c), string(args.Src), "dst", string(args.Dst)))
+	d.out.Publish(ctx, makeOpLog(OpCopyFile, d.requestID(c), uid, args.Src.String(), "dst", args.Dst.String()))
 	c.Respond()
 }
