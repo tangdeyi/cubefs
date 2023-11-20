@@ -122,7 +122,6 @@ func (fs *FileService) createDir(ctx context.Context, args struct {
 
 	return volume.PutObject(args.Path, nil, &PutFileOption{
 		MIMEType: ValueContentTypeDirectory,
-		Tagging:  nil,
 		Metadata: nil,
 	})
 }
@@ -150,7 +149,7 @@ func (fs *FileService) deleteDir(ctx context.Context, args struct {
 		return nil, err
 	}
 
-	if err := volume.DeletePath(args.Path + "/"); err != nil {
+	if _, err := volume.DeletePath(args.Path+"/", nil); err != nil {
 		return nil, err
 	}
 
@@ -176,13 +175,13 @@ func _deleteDir(ctx context.Context, volume *Volume, path string, marker string)
 			if err := _deleteDir(ctx, volume, prefixe, ""); err != nil {
 				return err
 			}
-			if err := volume.DeletePath(prefixe + "/"); err != nil {
+			if _, err := volume.DeletePath(prefixe+"/", nil); err != nil {
 				return err
 			}
 		}
 
 		for _, info := range result.Files {
-			if err := volume.DeletePath(info.Path); err != nil {
+			if _, err := volume.DeletePath(info.Path, nil); err != nil {
 				return err
 			}
 		}
@@ -219,7 +218,7 @@ func (fs *FileService) deleteFile(ctx context.Context, args struct {
 		return nil, err
 	}
 
-	if err := volume.DeletePath(args.Path); err != nil {
+	if _, err := volume.DeletePath(args.Path, nil); err != nil {
 		return nil, err
 	}
 
@@ -393,7 +392,6 @@ func (fs *FileService) UpLoadFile(writer http.ResponseWriter, request *http.Requ
 
 	object, err := volume.PutObject(filepath, file, &PutFileOption{
 		MIMEType: header.Header.Get("Content-Type"),
-		Tagging:  nil,
 		Metadata: nil,
 	})
 

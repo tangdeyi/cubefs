@@ -283,7 +283,7 @@ type TxInodeApplyRequest struct {
 
 type TxDentryApplyRequest struct {
 	TxID string `json:"txid"`
-	//DenKey      string `json:"denkey"`
+	// DenKey      string `json:"denkey"`
 	Pid         uint64 `json:"pid"`
 	Name        string `json:"name"`
 	TxApplyType int    `json:"type"`
@@ -364,7 +364,7 @@ type UnlinkInodeRequest struct {
 	VolName     string `json:"vol"`
 	PartitionID uint64 `json:"pid"`
 	Inode       uint64 `json:"ino"`
-	UniqID      uint64 `json:"uid"` //for request dedup
+	UniqID      uint64 `json:"uid"` // for request dedup
 	VerSeq      uint64 `json:"ver"`
 	DenVerSeq   uint64 `json:"denVer"`
 	RequestExtend
@@ -873,6 +873,9 @@ type MultipartInfo struct {
 	InitTime time.Time            `json:"itime"`
 	Parts    []*MultipartPartInfo `json:"parts"`
 	Extend   map[string]string    `json:"extend"`
+
+	ETag    string `json:"-"`
+	PutTime int64  `json:"-"`
 }
 
 type MultipartPartInfo struct {

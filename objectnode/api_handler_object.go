@@ -33,6 +33,7 @@ import (
 
 	"github.com/cubefs/cubefs/blobstore/common/trace"
 	"github.com/cubefs/cubefs/proto"
+	"github.com/cubefs/cubefs/util/flowctrl"
 	"github.com/cubefs/cubefs/util/log"
 )
 
@@ -654,12 +655,16 @@ func (o *ObjectNode) deleteObjectsHandler(w http.ResponseWriter, r *http.Request
 		objectKeys = append(objectKeys, object.Key)
 		log.LogWarnf("deleteObjectsHandler: delete path: requestID(%v) remote(%v) volume(%v) path(%v)",
 			GetRequestID(r), getRequestIP(r), vol.Name(), object.Key)
+
 		// QPS and Concurrency Limit
 		rateLimit := o.AcquireRateLimiter()
 		if err = rateLimit.AcquireLimitResource(vol.owner, DELETE_OBJECT); err != nil {
 			return
 		}
-		if err1 := vol.DeletePath(object.Key); err1 != nil {
+
+		// delete file
+		info, err1 := vol.DeletePath(object.Key, nil)
+		if err1 != nil {
 			log.LogErrorf("deleteObjectsHandler: delete object failed: requestID(%v) volume(%v) path(%v) err(%v)",
 				GetRequestID(r), vol.Name(), object.Key, err1)
 			if !strings.Contains(err1.Error(), AccessDenied.ErrorMessage) {
@@ -668,12 +673,19 @@ func (o *ObjectNode) deleteObjectsHandler(w http.ResponseWriter, r *http.Request
 				deletedErrors = append(deletedErrors, Error{Key: object.Key, Code: "AccessDenied", Message: err1.Error()})
 			}
 		} else {
+			// object replication
+			vol.ObjectReplication(info, nil, ReplicationOptions{
+				OpType:             DeleteReplicationType,
+				RequestID:          GetRequestID(r),
+				ReplicationRequest: r.Header.Get(XCfsSourceFrom) == ValueReplication,
+			})
 			deletedObjects = append(deletedObjects, Deleted{Key: object.Key})
 		}
 		rateLimit.ReleaseLimitResource(vol.owner, param.apiName)
 	}
 	span.AppendTrackLog("files.d", start, err)
 
+	// write response
 	deleteResult := DeleteResult{
 		Deleted: deletedObjects,
 		Error:   deletedErrors,
@@ -779,6 +791,7 @@ func (o *ObjectNode) copyObjectHandler(w http.ResponseWriter, r *http.Request) {
 		errorCode = InvalidArgument
 		return
 	}
+
 	// parse x-amz-copy-source header
 	sourceBucket, sourceObject, _, err := extractSrcBucketKey(r)
 	if err != nil {
@@ -787,21 +800,21 @@ func (o *ObjectNode) copyObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// check ACL
 	userInfo, err := o.getUserInfoByAccessKeyV2(param.AccessKey())
 	if err != nil {
 		log.LogErrorf("copyObjectHandler: get user info fail: requestID(%v) volume(%v) accessKey(%v) err(%v)",
 			GetRequestID(r), param.Bucket(), param.AccessKey(), err)
 		return
 	}
-	acl, err := ParseACL(r, userInfo.UserID, false, vol.GetOwner() != userInfo.UserID)
+
+	// parse acl
+	aclVal, err := ParseRequestACL(r, userInfo.UserID, false, vol.GetOwner() != userInfo.UserID)
 	if err != nil {
-		log.LogErrorf("copyObjectHandler: parse acl fail: requestID(%v) volume(%v) acl(%+v) err(%v)",
-			GetRequestID(r), param.Bucket(), acl, err)
+		log.LogErrorf("copyObjectHandler: parse acl fail: requestID(%v) volume(%v) err(%v)",
+			GetRequestID(r), param.Bucket(), err)
 		return
 	}
 
-	// get src object meta
 	var sourceVol *Volume
 	if sourceVol, err = o.getVol(sourceBucket); err != nil {
 		log.LogErrorf("copyObjectHandler: load source volume fail: requestID(%v) srcVolume(%v) err(%v)",
@@ -889,12 +902,12 @@ func (o *ObjectNode) copyObjectHandler(w http.ResponseWriter, r *http.Request) {
 
 	// copy file
 	opt := &PutFileOption{
+		ACL:          string(aclVal),
 		MIMEType:     contentType,
 		Disposition:  contentDisposition,
 		Metadata:     metadata,
 		CacheControl: cacheControl,
 		Expires:      expires,
-		ACL:          acl,
 		ObjectLock:   objetLock,
 	}
 	start = time.Now()
@@ -918,6 +931,22 @@ func (o *ObjectNode) copyObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// object replication
+	opType := PutReplicationType
+	if sourceBucket == vol.Name() && sourceObject == param.Object() {
+		if metadataDirective == MetadataDirectiveCopy {
+			goto success
+		}
+		opType = UpdateReplicationType
+	}
+	vol.ObjectReplication(fsFileInfo, nil, ReplicationOptions{
+		OpType:             opType,
+		RequestID:          GetRequestID(r),
+		ReplicationRequest: r.Header.Get(XCfsSourceFrom) == ValueReplication,
+	})
+
+success:
+	// write response
 	copyResult := CopyResult{
 		ETag:         "\"" + fsFileInfo.ETag + "\"",
 		LastModified: formatTimeISO(fsFileInfo.ModifyTime),
@@ -1306,8 +1335,9 @@ func (o *ObjectNode) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Check 'x-amz-tagging' header
 	// Reference: https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutObject.html#API_PutObject_RequestSyntax
-	var tagging *Tagging
+	var taggingVal string
 	if xAmxTagging := r.Header.Get(XAmzTagging); xAmxTagging != "" {
+		var tagging *Tagging
 		if tagging, err = ParseTagging(xAmxTagging); err != nil {
 			errorCode = InvalidArgument
 			return
@@ -1318,6 +1348,7 @@ func (o *ObjectNode) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 				GetRequestID(r), vol.Name(), param.Object(), tagging, errorCode)
 			return
 		}
+		taggingVal = tagging.Encode()
 	}
 
 	var userInfo *proto.UserInfo
@@ -1328,10 +1359,10 @@ func (o *ObjectNode) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check ACL
-	acl, err := ParseACL(r, userInfo.UserID, false, vol.GetOwner() != userInfo.UserID)
+	aclVal, err := ParseRequestACL(r, userInfo.UserID, false, vol.GetOwner() != userInfo.UserID)
 	if err != nil {
-		log.LogErrorf("putObjectHandler: parse acl fail: requestID(%v) volume(%v) path(%v) acl(%+v) err(%v)",
-			GetRequestID(r), vol.Name(), param.Object(), acl, err)
+		log.LogErrorf("putObjectHandler: parse acl fail: requestID(%v) volume(%v) path(%v) err(%v)",
+			GetRequestID(r), vol.Name(), param.Object(), err)
 		return
 	}
 
@@ -1364,11 +1395,20 @@ func (o *ObjectNode) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		errorCode = InvalidCacheArgument
 		return
 	}
-	// Checking user-defined metadata
+
+	// Check source header: x-cfs-source-puttime
+	var putTime int64
+	if srcPutTime := r.Header.Get(XCfsSourcePutTime); srcPutTime != "" {
+		if putTime, err = strconv.ParseInt(srcPutTime, 10, 64); err != nil {
+			log.LogErrorf("putObjectHandler: invalid putTime: requestID(%v) volume(%v) path(%v) putTime(%v) err(%v)",
+				GetRequestID(r), vol.Name(), param.Object(), srcPutTime, err)
+			errorCode = InvalidSourcePutTime
+			return
+		}
+	}
+
+	// Check user-defined metadata
 	metadata := ParseUserDefinedMetadata(r.Header)
-	// Audit file write
-	log.LogInfof("Audit: put object: requestID(%v) remote(%v) volume(%v) path(%v) type(%v)",
-		GetRequestID(r), getRequestIP(r), vol.Name(), param.Object(), contentType)
 
 	// Flow Control
 	var reader io.Reader
@@ -1378,16 +1418,41 @@ func (o *ObjectNode) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		reader = r.Body
 	}
 
+	// Write to local temporary file
+	var file File
+	if sysForceWriteFile {
+		var ctrl *flowctrl.Controller
+		if o.fileWriteCtrl != nil {
+			ctrl = o.fileWriteCtrl.Acquire(vol.owner, sysFileWriteBps)
+			defer o.fileWriteCtrl.Release(vol.owner)
+		}
+		file, err = StreamFromFileWithCtrl(io.LimitReader(reader, length), sysFileMaxMem, ctrl)
+		if err != nil {
+			log.LogErrorf("putObjectHandler: read file stream fail: requestID(%v) volume(%v) path(%v) err(%v)",
+				GetRequestID(r), vol.Name(), param.Object(), err)
+			return
+		}
+		reader = file
+	}
+	fileClose := true
+	defer func() {
+		if err != nil || errorCode != nil || fileClose {
+			file.Close()
+		}
+	}()
+
 	// Put Object
 	opt := &PutFileOption{
+		ACL:          string(aclVal),
 		MIMEType:     contentType,
 		Disposition:  contentDisposition,
-		Tagging:      tagging,
+		Tagging:      taggingVal,
 		Metadata:     metadata,
 		CacheControl: cacheControl,
 		Expires:      expires,
-		ACL:          acl,
+		PutTime:      putTime,
 		ObjectLock:   objetLock,
+		ETag:         r.Header.Get(XCfsSourceETag),
 	}
 	start := time.Now()
 	fsFileInfo, err := vol.PutObject(param.Object(), reader, opt)
@@ -1399,7 +1464,7 @@ func (o *ObjectNode) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// check content MD5
+	// Check content MD5
 	if requestMD5 != "" && requestMD5 != fsFileInfo.ETag {
 		log.LogErrorf("putObjectHandler: MD5 validate fail: requestID(%v) volume(%v) path(%v) requestMD5(%v) serverMD5(%v)",
 			GetRequestID(r), vol.Name(), param.Object(), requestMD5, fsFileInfo.ETag)
@@ -1407,8 +1472,17 @@ func (o *ObjectNode) putObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// set response header
+	// Set response header
 	w.Header()[ETag] = []string{wrapUnescapedQuot(fsFileInfo.ETag)}
+
+	// Object replication
+	fileClose = false
+	vol.ObjectReplication(fsFileInfo, file, ReplicationOptions{
+		OpType:             PutReplicationType,
+		RequestID:          GetRequestID(r),
+		ReplicationRequest: r.Header.Get(XCfsSourceFrom) == ValueReplication,
+	})
+
 	return
 }
 
@@ -1487,7 +1561,7 @@ func (o *ObjectNode) postObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// other form fields check
+	// parse object key
 	key := formReq.MultipartFormValue("key")
 	if key == "" {
 		errorCode = MalformedPOSTRequest.Copy()
@@ -1501,8 +1575,10 @@ func (o *ObjectNode) postObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var aclInfo *AccessControlPolicy
+	// parse acl
+	var aclVal []byte
 	if acl := formReq.MultipartFormValue("acl"); acl != "" {
+		var aclInfo *AccessControlPolicy
 		if aclInfo, err = ParseCannedAcl(acl, userInfo.UserID); err != nil {
 			log.LogErrorf("postObjectHandler: parse canned acl fail: requestID(%v) volume(%v) acl(%v) err(%v)",
 				GetRequestID(r), param.Bucket(), acl, err)
@@ -1510,11 +1586,19 @@ func (o *ObjectNode) postObjectHandler(w http.ResponseWriter, r *http.Request) {
 			errorCode.ErrorMessage = fmt.Sprintf("%s (%v)", errorCode.ErrorMessage, err)
 			return
 		}
+		if aclInfo != nil {
+			if aclVal, err = aclInfo.Encode(); err != nil {
+				log.LogErrorf("postObjectHandler: encode acl fail: requestID(%v) volume(%v) acl(%+v) err(%v)",
+					GetRequestID(r), param.Bucket(), aclInfo, err)
+				return
+			}
+		}
 	}
 
-	var tagging *Tagging
+	// parse tagging
+	var taggingVal string
 	if taggingRaw := formReq.MultipartFormValue("tagging"); taggingRaw != "" {
-		tagging = NewTagging()
+		tagging := NewTagging()
 		if err = xml.Unmarshal([]byte(taggingRaw), tagging); err != nil {
 			errorCode = MalformedPOSTRequest.Copy()
 			errorCode.ErrorMessage = fmt.Sprintf("%s (%s)", errorCode.ErrorMessage, "Invalid tagging")
@@ -1525,8 +1609,10 @@ func (o *ObjectNode) postObjectHandler(w http.ResponseWriter, r *http.Request) {
 			errorCode.ErrorMessage = fmt.Sprintf("%s (%v)", errorCode.ErrorMessage, erc)
 			return
 		}
+		taggingVal = tagging.Encode()
 	}
 
+	// parse success_action_status and success_action_redirect
 	successStatus := formReq.MultipartFormValue("success_action_status")
 	successRedirect := formReq.MultipartFormValue("success_action_redirect")
 	var successRedirectURL *url.URL
@@ -1538,6 +1624,7 @@ func (o *ObjectNode) postObjectHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// parse content-type, content-disposition and cache-control
 	contentType := formReq.MultipartFormValue("content-type")
 	contentDisposition := formReq.MultipartFormValue("content-disposition")
 	cacheControl := formReq.MultipartFormValue("cache-control")
@@ -1547,6 +1634,7 @@ func (o *ObjectNode) postObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// parse expires
 	expires := formReq.MultipartFormValue("expires")
 	if expires != "" && !ValidateCacheExpires(expires) {
 		errorCode = MalformedPOSTRequest.Copy()
@@ -1554,6 +1642,7 @@ func (o *ObjectNode) postObjectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// parse policy
 	policy := formReq.MultipartFormValue("policy")
 	if policy == "" {
 		errorCode = MalformedPOSTRequest.Copy()
@@ -1562,7 +1651,12 @@ func (o *ObjectNode) postObjectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// read the file, the rest will be written to a temporary file if exceed
-	f, size, err := formReq.FormFile(10 << 20)
+	var ctrl *flowctrl.Controller
+	if o.fileWriteCtrl != nil {
+		ctrl = o.fileWriteCtrl.Acquire(vol.owner, sysFileWriteBps)
+		defer o.fileWriteCtrl.Release(vol.owner)
+	}
+	f, size, err := formReq.FormFile(sysFileMaxMem, ctrl)
 	if err != nil {
 		log.LogErrorf("postObjectHandler: form file fail: requestID(%v) volume(%v) err(%v)",
 			GetRequestID(r), param.Bucket(), err)
@@ -1570,14 +1664,21 @@ func (o *ObjectNode) postObjectHandler(w http.ResponseWriter, r *http.Request) {
 		errorCode.ErrorMessage = fmt.Sprintf("%s (%v)", errorCode.ErrorMessage, err)
 		return
 	}
-	defer f.Close()
+	fileClose := true
+	defer func() {
+		if err != nil || errorCode != nil || fileClose {
+			f.Close()
+		}
+	}()
+
+	// check the file size: cannot exceed 5GB
 	if size > SinglePutLimit {
 		errorCode = EntityTooLarge
 		return
 	}
 
+	// policy match forms and user-defined metadata
 	metadata := make(map[string]string)
-	// policy match forms
 	forms := make(map[string]string)
 	for name, values := range formReq.MultipartForm.Value {
 		name = strings.ToLower(name)
@@ -1609,13 +1710,13 @@ func (o *ObjectNode) postObjectHandler(w http.ResponseWriter, r *http.Request) {
 
 	// put object
 	putOpt := &PutFileOption{
+		ACL:          string(aclVal),
 		MIMEType:     contentType,
 		Disposition:  contentDisposition,
-		Tagging:      tagging,
+		Tagging:      taggingVal,
 		Metadata:     metadata,
 		CacheControl: cacheControl,
 		Expires:      expires,
-		ACL:          aclInfo,
 		ObjectLock:   objetLock,
 	}
 	start := time.Now()
@@ -1639,6 +1740,14 @@ func (o *ObjectNode) postObjectHandler(w http.ResponseWriter, r *http.Request) {
 	// set response header
 	etag := wrapUnescapedQuot(fsFileInfo.ETag)
 	w.Header()[ETag] = []string{etag}
+
+	// object replication
+	fileClose = false
+	vol.ObjectReplication(fsFileInfo, f, ReplicationOptions{
+		OpType:             PutReplicationType,
+		RequestID:          GetRequestID(r),
+		ReplicationRequest: r.Header.Get(XCfsSourceFrom) == ValueReplication,
+	})
 
 	// return response depending on success_action_xxx parameter
 	if successRedirectURL != nil {
@@ -1720,9 +1829,18 @@ func (o *ObjectNode) deleteObjectHandler(w http.ResponseWriter, r *http.Request)
 	log.LogInfof("Audit: delete object: requestID(%v) remote(%v) volume(%v) path(%v)",
 		GetRequestID(r), getRequestIP(r), vol.Name(), param.Object())
 
-	// Delete file
+	// Delete File
+	delOpt := &DeleteFileOption{ETag: r.Header.Get(XCfsSourceETag)}
+	if srcPutTime := r.Header.Get(XCfsSourcePutTime); srcPutTime != "" {
+		if delOpt.PutTime, err = strconv.ParseInt(srcPutTime, 10, 64); err != nil {
+			log.LogErrorf("deleteObjectHandler: invalid putTime: requestID(%v) volume(%v) path(%v) putTime(%v) err(%v)",
+				GetRequestID(r), vol.Name(), param.Object(), srcPutTime, err)
+			errorCode = InvalidSourcePutTime
+			return
+		}
+	}
 	start := time.Now()
-	err = vol.DeletePath(param.Object())
+	info, err := vol.DeletePath(param.Object(), delOpt)
 	span.AppendTrackLog("file.d", start, err)
 	if err != nil {
 		log.LogErrorf("deleteObjectHandler: Volume delete file fail: "+
@@ -1732,6 +1850,13 @@ func (o *ObjectNode) deleteObjectHandler(w http.ResponseWriter, r *http.Request)
 		}
 		return
 	}
+
+	// Object replication
+	vol.ObjectReplication(info, nil, ReplicationOptions{
+		OpType:             DeleteReplicationType,
+		RequestID:          GetRequestID(r),
+		ReplicationRequest: r.Header.Get(XCfsSourceFrom) == ValueReplication,
+	})
 
 	w.WriteHeader(http.StatusNoContent)
 	return
