@@ -104,6 +104,7 @@ func (l *LcNode) opMasterHeartbeat(conn net.Conn, p *proto.Packet, remoteAddr st
 			resp.CRRScanningTasks[scanner.taskId] = info
 		}
 		l.scannerMutex.RUnlock()
+		// todo add crr statics
 
 		resp.LcTaskCountLimit = lcNodeTaskCountLimit
 		resp.Status = proto.TaskSucceeds
