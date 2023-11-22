@@ -53,6 +53,11 @@ const (
 	defaultIntervalToCheckRegister        = 2 * defaultLcNodeTimeOutSec
 
 	defaultUnboundedChanInitCapacity = 10000
+
+	maxKeys      = 100
+	maxRetries   = 3
+	region       = "default"
+	taskPoolSize = 10
 )
 
 var (

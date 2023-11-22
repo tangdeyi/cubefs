@@ -52,7 +52,7 @@ func (c *Cluster) handleLcNodeTaskResponse(nodeAddr string, task *proto.AdminTas
 		response := task.Response.(*proto.SnapshotVerDelTaskResponse)
 		err = c.handleLcNodeSnapshotScanResp(task.OperatorAddr, response)
 	case proto.OpLcNodeCRR:
-		response := task.Response.(*proto.LcNodeCRRTaskResponse)
+		response := task.Response.(*proto.CRRTaskResponse)
 		err = c.handleLcNodeCRRScanResp(task.OperatorAddr, response)
 	default:
 		err = fmt.Errorf(fmt.Sprintf("lc unknown operate code %v", task.OpCode))
@@ -224,7 +224,7 @@ func (c *Cluster) handleLcNodeSnapshotScanResp(nodeAddr string, resp *proto.Snap
 	return
 }
 
-func (c *Cluster) handleLcNodeCRRScanResp(nodeAddr string, resp *proto.LcNodeCRRTaskResponse) (err error) {
+func (c *Cluster) handleLcNodeCRRScanResp(nodeAddr string, resp *proto.CRRTaskResponse) (err error) {
 	log.LogDebugf("action[handleLcNodeCRRScanResp] lcNode[%v] task[%v] Enter", nodeAddr, resp.Id)
 	defer func() {
 		log.LogDebugf("action[handleLcNodeCRRScanResp] lcNode[%v] task[%v] Exit", nodeAddr, resp.Id)

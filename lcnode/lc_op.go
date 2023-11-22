@@ -87,6 +87,7 @@ func (l *LcNode) opMasterHeartbeat(conn net.Conn, p *proto.Packet, remoteAddr st
 			resp.SnapshotScanningTasks[scanner.ID] = info
 		}
 		l.scannerMutex.RUnlock()
+		// todo add crr statics
 
 		resp.Status = proto.TaskSucceeds
 
@@ -181,5 +182,37 @@ func (l *LcNode) opSnapshotVerDel(conn net.Conn, p *proto.Packet) (err error) {
 	l.startSnapshotScan(adminTask)
 	l.respondToMaster(adminTask)
 
+	return
+}
+
+func (l *LcNode) opCRRScan(conn net.Conn, p *proto.Packet) (err error) {
+	go func() {
+		p.PacketOkReply()
+		if err := p.WriteToConn(conn); err != nil {
+			log.LogErrorf("ack master response: %s", err.Error())
+		}
+	}()
+
+	data := p.Data
+	var (
+		req       = &proto.CRRTaskRequest{}
+		resp      = &proto.CRRTaskResponse{}
+		adminTask = &proto.AdminTask{
+			Request: req,
+		}
+	)
+	decoder := json.NewDecoder(bytes.NewBuffer(data))
+	decoder.UseNumber()
+
+	if err = decoder.Decode(adminTask); err != nil {
+		resp.Status = proto.TaskFailed
+		resp.Result = err.Error()
+		adminTask.Response = resp
+		l.respondToMaster(adminTask)
+		return
+	}
+	l.startCRRScan(adminTask)
+	// master will delete this adminTask from taskMgr
+	l.respondToMaster(adminTask)
 	return
 }

@@ -117,10 +117,10 @@ func (mgr *CRRMgr) scanning() bool {
 				}
 			}
 			if exist(node, nodes) {
-				log.LogInfof("scanning task: %v, exist node: %v, all nodes: %v", task, node, nodes)
+				log.LogInfof("scanning crr task: %v, exist node: %v, all nodes: %v", task, node, nodes)
 				return true
 			}
-			log.LogInfof("scanning task: %v, but not exist node: %v, all nodes: %v", task, node, nodes)
+			log.LogInfof("scanning crr task: %v, but not exist node: %v, all nodes: %v", task, node, nodes)
 		}
 	}
 	return false
@@ -190,9 +190,9 @@ func (mgr *CRRMgr) notifyIdleLcNode() {
 
 type CRRRuleTaskStatus struct {
 	sync.RWMutex
-	ToBeScanned map[string]*proto.CRRTask               // task to be scanned
-	Scanning    map[string]*proto.CRRTask               // task being scanned
-	Results     map[string]*proto.LcNodeCRRTaskResponse // task scan results
+	ToBeScanned map[string]*proto.CRRTask         // task to be scanned
+	Scanning    map[string]*proto.CRRTask         // task being scanned
+	Results     map[string]*proto.CRRTaskResponse // task scan results
 	StartTime   *time.Time
 	EndTime     *time.Time
 }
@@ -201,7 +201,7 @@ func NewCRRRuleTaskStatus() *CRRRuleTaskStatus {
 	return &CRRRuleTaskStatus{
 		ToBeScanned: make(map[string]*proto.CRRTask),
 		Scanning:    make(map[string]*proto.CRRTask),
-		Results:     make(map[string]*proto.LcNodeCRRTaskResponse),
+		Results:     make(map[string]*proto.CRRTaskResponse),
 	}
 }
 
@@ -249,7 +249,7 @@ func (crs *CRRRuleTaskStatus) GetTaskFromScanning(taskId string) *proto.CRRTask 
 	return crs.Scanning[taskId]
 }
 
-func (crs *CRRRuleTaskStatus) AddResult(resp *proto.LcNodeCRRTaskResponse) {
+func (crs *CRRRuleTaskStatus) AddResult(resp *proto.CRRTaskResponse) {
 	crs.Lock()
 	defer crs.Unlock()
 	crs.Results[resp.Id] = resp

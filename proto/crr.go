@@ -39,29 +39,44 @@ type CRRTask struct {
 	Id      string
 	VolName string
 	Rule    *CRRRule
+	SrcAuth Auth
+	DstAuth Auth
 }
 
 type CRRRule struct {
 	RuleID     string `json:"rule_id"`
+	SrcVolName string `json:"src_vol_name"`
 	DstVolName string `json:"dst_vol_name"`
 	MasterAddr string `json:"master_addr"`
-	ObjectAddr string `json:"object_addr"`
+	SrcS3Addr  string `json:"src_s3_addr"`
+	DstS3Addr  string `json:"dst_s3_addr"`
 	Status     string `json:"status"`
 	Prefix     string `json:"prefix"`
 	SyncDelete bool   `json:"sync_delete"`
 }
 
-type LcNodeCRRTaskResponse struct {
+type Auth struct {
+	AK string
+	SK string
+}
+
+type CRRTaskRequest struct {
+	MasterAddr string
+	LcNodeAddr string
+	Task       *CRRTask
+}
+
+type CRRTaskResponse struct {
 	Id        string
 	StartTime *time.Time
 	EndTime   *time.Time
 	Done      bool
 	Status    uint8
 	Result    string
-	LcNodeCRRTaskStatistic
+	CRRTaskStatistic
 }
 
-type LcNodeCRRTaskStatistic struct {
+type CRRTaskStatistic struct {
 	Volume               string
 	RuleId               string
 	TotalInodeScannedNum int64
@@ -69,10 +84,4 @@ type LcNodeCRRTaskStatistic struct {
 	DirScannedNum        int64
 	ExpiredNum           int64
 	ErrorSkippedNum      int64
-}
-
-type CRRRuleTaskRequest struct {
-	MasterAddr string
-	LcNodeAddr string
-	Task       *CRRTask
 }

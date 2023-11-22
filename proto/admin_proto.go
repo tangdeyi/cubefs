@@ -695,7 +695,7 @@ type LcNodeHeartbeatResponse struct {
 	Result                string
 	LcScanningTasks       map[string]*LcNodeRuleTaskResponse
 	SnapshotScanningTasks map[string]*SnapshotVerDelTaskResponse
-	CRRScanningTasks      map[string]*LcNodeCRRTaskResponse
+	CRRScanningTasks      map[string]*CRRTaskResponse
 }
 
 // DeleteFileRequest defines the request to delete a file.
