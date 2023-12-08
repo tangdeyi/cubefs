@@ -444,6 +444,9 @@ func (v *volume) UploadFile(ctx context.Context, req *sdk.UploadFileReq) (*sdk.I
 		if den == nil || den.FileId != req.OldFileId || proto.IsDir(den.Type) {
 			span.Warnf("target file already exist but conflict, den %v, reqOld %d",
 				den, req.OldFileId)
+			if den != nil {
+				return nil, 0, sdk.Conflicted(den.FileId)
+			}
 			return nil, 0, sdk.ErrConflict
 		}
 		oldIno = den.Inode
@@ -830,7 +833,7 @@ func (v *volume) CompleteMultiPart(ctx context.Context, req *sdk.CompleteMultipa
 		if err != nil {
 			span.Warnf("lookup path file failed, filepath %s, err %s", parDir, err.Error())
 			if err == syscall.ENOENT {
-				return nil, 0, sdk.ErrConflict
+				return nil, 0, sdk.Conflicted(0)
 			}
 			return nil, 0, syscallToErr(err)
 		}
@@ -844,6 +847,9 @@ func (v *volume) CompleteMultiPart(ctx context.Context, req *sdk.CompleteMultipa
 
 		if den == nil || den.FileId != oldFileId || proto.IsDir(den.Type) {
 			span.Warnf("target file already exist but conflict, path %s, den %v, reqOld %d", filepath, den, oldFileId)
+			if den != nil {
+				return nil, 0, sdk.Conflicted(den.FileId)
+			}
 			return nil, 0, sdk.ErrConflict
 		}
 

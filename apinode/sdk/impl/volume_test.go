@@ -339,7 +339,7 @@ func Test_volume_CompleteMultiPart(t *testing.T) {
 
 	mockMeta.EXPECT().LookupPath(dir).Return(uint64(0), syscall.ENOENT)
 	_, _, err = v.CompleteMultiPart(ctx, req)
-	require.Equal(t, err, sdk.ErrConflict)
+	require.Equal(t, err, sdk.Conflicted(0))
 
 	parIno := uint64(10)
 	mockMeta.EXPECT().LookupPath(dir).Return(parIno, nil).AnyTimes()
@@ -351,8 +351,8 @@ func Test_volume_CompleteMultiPart(t *testing.T) {
 	}{
 		{nil, syscall.EAGAIN, syscallToErr(syscall.EAGAIN)},
 		{nil, syscall.ENOENT, sdk.ErrConflict},
-		{&sdk.DirInfo{FileId: 1}, nil, sdk.ErrConflict},
-		{&sdk.DirInfo{FileId: parIno, Type: uint32(defaultDirMod)}, nil, sdk.ErrConflict},
+		{&sdk.DirInfo{FileId: 1}, nil, sdk.Conflicted(1)},
+		{&sdk.DirInfo{FileId: parIno, Type: uint32(defaultDirMod)}, nil, sdk.Conflicted(parIno)},
 	}
 
 	for _, c := range tcases {
@@ -967,7 +967,7 @@ func Test_volume_UploadFile(t *testing.T) {
 	}{
 		{nil, syscall.EAGAIN, syscallToErr(syscall.EAGAIN)},
 		{nil, syscall.ENOENT, sdk.ErrConflict},
-		{den: &proto.Dentry{Type: defaultFileMode, FileId: 0}, wantErr: sdk.ErrConflict},
+		{den: &proto.Dentry{Type: defaultFileMode, FileId: 0}, wantErr: sdk.Conflicted(0)},
 	}
 	for _, lc := range lookCase {
 		mockMeta.EXPECT().LookupEx(req.ParIno, req.Name).Return(lc.den, lc.returnErr)
