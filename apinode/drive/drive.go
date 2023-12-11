@@ -65,9 +65,12 @@ const (
 	internalMetaMD5      = internalMetaPrefix + "md5"
 	internalMetaUploadID = internalMetaPrefix + "uploadid"
 
-	PAXFileID = "x-cfa-file-id"
-	PAXCrc32  = HeaderCrc32
-	PAXMD5    = HeaderMD5
+	PAXFileID         = "x-cfa-file-id"
+	PAXCrc32          = HeaderCrc32
+	PAXMD5            = HeaderMD5
+	PAXDownloadStatus = "x-cfa-download-status"
+	PAXDownloadCode   = "x-cfa-download-code"
+	PAXDownloadError  = "x-cfa-download-error"
 
 	maxMultipartNumber = 10000
 )
@@ -346,7 +349,9 @@ func (d *DriveNode) getFileEncryptor(ctx context.Context, key []byte, r io.Reade
 	span := trace.SpanFromContextSafe(ctx)
 	st := time.Now()
 	er, err := d.cryptor.FileEncryptor(key, r)
-	span.AppendTrackLog("ccfe", st, err)
+	if hasTraceLog(ctx) {
+		span.AppendTrackLog("ccfe", st, err)
+	}
 	return er, err
 }
 
@@ -354,7 +359,9 @@ func (d *DriveNode) getFileDecryptor(ctx context.Context, key []byte, r io.Reade
 	span := trace.SpanFromContextSafe(ctx)
 	st := time.Now()
 	er, err := d.cryptor.FileDecryptor(key, r)
-	span.AppendTrackLog("ccfd", st, err)
+	if hasTraceLog(ctx) {
+		span.AppendTrackLog("ccfd", st, err)
+	}
 	return er, err
 }
 
@@ -423,7 +430,11 @@ func (d *DriveNode) lookup(ctx context.Context, vol sdk.IVolume, parentIno Inode
 	err = sdk.ErrBadRequest
 	span := trace.SpanFromContextSafe(ctx)
 	st := time.Now()
-	defer func() { span.AppendTrackLog("clu", st, err) }()
+	defer func() {
+		if hasTraceLog(ctx) {
+			span.AppendTrackLog("clu", st, err)
+		}
+	}()
 	names := strings.Split(path, "/")
 	for _, name := range names {
 		if name == "" {
@@ -441,7 +452,11 @@ func (d *DriveNode) lookup(ctx context.Context, vol sdk.IVolume, parentIno Inode
 func (d *DriveNode) createDir(ctx context.Context, vol sdk.IVolume, parentIno Inode, path string, recursive bool) (ino Inode, fileID uint64, err error) {
 	span := trace.SpanFromContextSafe(ctx)
 	st := time.Now()
-	defer func() { span.AppendTrackLog("ccd", st, err) }()
+	defer func() {
+		if hasTraceLog(ctx) {
+			span.AppendTrackLog("ccd", st, err)
+		}
+	}()
 	ino = parentIno
 	fileID = 0
 	if path == "" || path == "/" {
