@@ -1559,7 +1559,7 @@ func (c *Cluster) loadCRRConfs() (err error) {
 		return err
 	}
 	for key, value := range result {
-		CRRStatus := &bsProto.CRRTaskStatistic{}
+		CRRStatus := &bsProto.CRRHistoryTaskStat{}
 		if err = json.Unmarshal(value, CRRStatus); err != nil {
 			err = fmt.Errorf("action[loadCRRStatus],value:%v,unmarshal err:%v", string(value), err)
 			return
@@ -1567,7 +1567,7 @@ func (c *Cluster) loadCRRConfs() (err error) {
 		taskId := strings.TrimPrefix(key, CRRStatusPrefix)
 		log.LogDebugf("loadCRRStatus taskId[%v] CRRStatus[%+v]", taskId, CRRStatus)
 		resp := &bsProto.CRRTaskResponse{
-			CRRTaskStatistic: *CRRStatus,
+			CRRHistoryTaskStat: *CRRStatus,
 		}
 		c.CRRMgr.CRRTaskStatus.AddCRRStatus(resp)
 	}

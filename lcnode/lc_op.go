@@ -94,7 +94,7 @@ func (l *LcNode) opMasterHeartbeat(conn net.Conn, p *proto.Packet, remoteAddr st
 			info := &proto.CRRTaskResponse{
 				Id:     scanner.taskId,
 				LcNode: l.localServerAddr,
-				CRRTaskStatistic: proto.CRRTaskStatistic{
+				CRRHistoryTaskStat: proto.CRRHistoryTaskStat{
 					Marker:     scanner.getMarker(),
 					SuccessNum: atomic.LoadInt64(&scanner.crrStat.SuccessNum),
 					FailNum:    atomic.LoadInt64(&scanner.crrStat.FailNum),
@@ -104,7 +104,6 @@ func (l *LcNode) opMasterHeartbeat(conn net.Conn, p *proto.Packet, remoteAddr st
 			resp.CRRScanningTasks[scanner.taskId] = info
 		}
 		l.scannerMutex.RUnlock()
-		// todo add crr statics
 
 		resp.LcTaskCountLimit = lcNodeTaskCountLimit
 		resp.Status = proto.TaskSucceeds

@@ -76,10 +76,10 @@ type CRRTaskResponse struct {
 	Done       bool
 	Status     uint8
 	Result     string
-	CRRTaskStatistic
+	CRRHistoryTaskStat
 }
 
-type CRRTaskStatistic struct {
+type CRRHistoryTaskStat struct {
 	Marker     string `json:"marker"`
 	SuccessNum int64  `json:"success_num"`
 	FailNum    int64  `json:"fail_num"`

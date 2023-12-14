@@ -78,8 +78,9 @@ func (mgr *CRRMgr) startCRRScan() {
 	log.LogDebugf("startCRRScan: %v crr rule tasks to schedule!", len(tasks))
 
 	for _, r := range tasks {
-		mgr.CRRTaskStatus.ToBeScanned[r.Id] = r
+		// set crr rule marker if any
 		r.Rule.Marker = mgr.CRRTaskStatus.GetCRRStatus(r.Id).Marker
+		mgr.CRRTaskStatus.ToBeScanned[r.Id] = r
 	}
 
 	go mgr.process()
@@ -126,7 +127,7 @@ func (mgr *CRRMgr) recordCRRStatusToDB() {
 				return
 			}
 		}
-		v, _ := json.Marshal(taskResp.CRRTaskStatistic)
+		v, _ := json.Marshal(taskResp.CRRHistoryTaskStat)
 		metadata := new(RaftCmd)
 		metadata.Op = opCRRStatusSet
 		metadata.K = CRRStatusPrefix + taskId
@@ -268,13 +269,13 @@ func (crs *CRRTaskStatus) AddCRRStatus(resp *proto.CRRTaskResponse) {
 	crs.Results[resp.Id] = resp
 }
 
-func (crs *CRRTaskStatus) GetCRRStatus(taskId string) proto.CRRTaskStatistic {
+func (crs *CRRTaskStatus) GetCRRStatus(taskId string) proto.CRRHistoryTaskStat {
 	crs.RLock()
 	defer crs.RUnlock()
-	status := proto.CRRTaskStatistic{}
+	status := proto.CRRHistoryTaskStat{}
 	res := crs.Results[taskId]
 	if res == nil {
 		return status
 	}
-	return res.CRRTaskStatistic
+	return res.CRRHistoryTaskStat
 }

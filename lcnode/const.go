@@ -58,7 +58,6 @@ const (
 
 	maxKeys               = 100
 	maxRetries            = 3
-	region                = "default"
 	partSize              = 8 * 1 << 20
 	uploadPartConcurrency = 4
 )

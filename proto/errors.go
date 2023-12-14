@@ -163,6 +163,7 @@ const (
 	ErrCodeZoneNumError
 	ErrCodeVersionOpError
 	ErrCodeNodeSetNotExists
+	ErrCodeNodeNoSuchCRRConfig
 )
 
 // Err2CodeMap error map to code
@@ -228,6 +229,7 @@ var Err2CodeMap = map[error]int32{
 	ErrZoneNum:                         ErrCodeZoneNumError,
 	ErrCodeVersionOp:                   ErrCodeVersionOpError,
 	ErrNodeSetNotExists:                ErrCodeNodeSetNotExists,
+	ErrNoSuchCRRConfig:                 ErrCodeNodeNoSuchCRRConfig,
 }
 
 func ParseErrorCode(code int32) error {
@@ -300,6 +302,7 @@ var code2ErrMap = map[int32]error{
 	ErrCodeZoneNumError:                    ErrZoneNum,
 	ErrCodeVersionOpError:                  ErrCodeVersionOp,
 	ErrCodeNodeSetNotExists:                ErrNodeSetNotExists,
+	ErrCodeNodeNoSuchCRRConfig:             ErrNoSuchCRRConfig,
 }
 
 type GeneralResp struct {

@@ -6353,6 +6353,27 @@ func (m *Server) GetCRR(w http.ResponseWriter, r *http.Request) {
 	sendOkReply(w, r, newSuccessHTTPReply(CRRConf))
 }
 
+func (m *Server) GetCRRTaskStatus(w http.ResponseWriter, r *http.Request) {
+	var (
+		err     error
+		volName string
+		CRRConf *proto.CRRConfiguration
+	)
+	if volName, err = parseAndExtractName(r); err != nil {
+		sendErrReply(w, r, &proto.HTTPReply{Code: proto.ErrCodeParamError, Msg: err.Error()})
+		return
+	}
+	if _, err = m.cluster.getVol(volName); err != nil {
+		sendErrReply(w, r, newErrHTTPReply(proto.ErrVolNotExists))
+		return
+	}
+	CRRConf = m.cluster.CRRMgr.GetCRR(volName)
+	if CRRConf == nil {
+		sendErrReply(w, r, newErrHTTPReply(proto.ErrNoSuchCRRConfig))
+	}
+	sendOkReply(w, r, newSuccessHTTPReply(m.cluster.CRRMgr.CRRTaskStatus.Results))
+}
+
 func (m *Server) DeleteCRR(w http.ResponseWriter, r *http.Request) {
 	var (
 		err     error

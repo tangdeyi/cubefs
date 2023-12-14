@@ -45,7 +45,7 @@ type CRRScanner struct {
 	dstUploader *s3manager.Uploader
 	marker      string
 	lock        sync.RWMutex
-	crrStat     *proto.CRRTaskStatistic
+	crrStat     *proto.CRRHistoryTaskStat
 	limiter     *rate.Limiter
 }
 
@@ -74,12 +74,12 @@ func NewCRRScanner(adminTask *proto.AdminTask, l *LcNode) (*CRRScanner, error) {
 		adminTask: adminTask,
 		marker:    request.Task.Rule.Marker,
 		rule:      scanTask.Rule,
-		crrStat:   &proto.CRRTaskStatistic{},
+		crrStat:   &proto.CRRHistoryTaskStat{},
 		limiter:   rate.NewLimiter(lcScanLimitPerSecond, defaultLcScanLimitBurst),
 	}
 
 	srcS3Cfg := &proto.S3ClientConfig{
-		Region:           region,
+		Region:           request.Task.Rule.SrcS3Cfg.Region,
 		EndPoint:         scanTask.Rule.SrcS3Cfg.S3Addr,
 		Ak:               scanTask.SrcAuth.AK,
 		Sk:               scanTask.SrcAuth.SK,
@@ -87,7 +87,7 @@ func NewCRRScanner(adminTask *proto.AdminTask, l *LcNode) (*CRRScanner, error) {
 		S3ForcePathStyle: true,
 	}
 	dstS3Cfg := &proto.S3ClientConfig{
-		Region:           region,
+		Region:           request.Task.Rule.DstS3Cfg.Region,
 		EndPoint:         scanTask.Rule.DstS3Cfg.S3Addr,
 		Ak:               scanTask.DstAuth.AK,
 		Sk:               scanTask.DstAuth.SK,
@@ -187,7 +187,7 @@ func (s *CRRScanner) replicate() {
 			Done:    true,
 			Id:      s.taskId,
 			LcNode:  s.lcnode.localServerAddr,
-			CRRTaskStatistic: proto.CRRTaskStatistic{
+			CRRHistoryTaskStat: proto.CRRHistoryTaskStat{
 				SuccessNum: s.crrStat.SuccessNum,
 				FailNum:    s.crrStat.FailNum,
 				SkipNum:    s.crrStat.SkipNum,
