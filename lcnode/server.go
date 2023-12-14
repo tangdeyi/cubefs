@@ -48,6 +48,7 @@ type LcNode struct {
 	control          common.Control
 	lcScanners       map[string]*LcScanner
 	snapshotScanners map[string]*SnapshotScanner
+	CRRScanners      map[string]*CRRScanner
 }
 
 func NewServer() *LcNode {
@@ -333,6 +334,8 @@ func (l *LcNode) handlePacket(conn net.Conn, p *proto.Packet, remoteAddr string)
 		err = l.opLcScan(conn, p)
 	case proto.OpLcNodeSnapshotVerDel:
 		err = l.opSnapshotVerDel(conn, p)
+	case proto.OpLcNodeCRR:
+		err = l.opCRRScan(conn, p)
 	default:
 		err = fmt.Errorf("%s unknown Opcode: %d, reqId: %d", remoteAddr,
 			p.Opcode, p.GetReqID())

@@ -55,6 +55,12 @@ const (
 
 	defaultUnboundedChanInitCapacity = 10000
 	defaultLcNodeTaskCountLimit      = 1
+
+	maxKeys               = 100
+	maxRetries            = 3
+	region                = "default"
+	partSize              = 8 * 1 << 20
+	uploadPartConcurrency = 4
 )
 
 var (

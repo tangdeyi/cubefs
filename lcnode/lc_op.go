@@ -40,6 +40,7 @@ func (l *LcNode) opMasterHeartbeat(conn net.Conn, p *proto.Packet, remoteAddr st
 		resp = &proto.LcNodeHeartbeatResponse{
 			LcScanningTasks:       make(map[string]*proto.LcNodeRuleTaskResponse, 0),
 			SnapshotScanningTasks: make(map[string]*proto.SnapshotVerDelTaskResponse, 0),
+			CRRScanningTasks:      make(map[string]*proto.CRRTaskResponse, 0),
 		}
 		adminTask = &proto.AdminTask{
 			Request: req,
@@ -88,6 +89,19 @@ func (l *LcNode) opMasterHeartbeat(conn net.Conn, p *proto.Packet, remoteAddr st
 				},
 			}
 			resp.SnapshotScanningTasks[scanner.ID] = info
+		}
+		for _, scanner := range l.CRRScanners {
+			info := &proto.CRRTaskResponse{
+				Id:     scanner.taskId,
+				LcNode: l.localServerAddr,
+				CRRTaskStatistic: proto.CRRTaskStatistic{
+					Marker:     scanner.getMarker(),
+					SuccessNum: atomic.LoadInt64(&scanner.crrStat.SuccessNum),
+					FailNum:    atomic.LoadInt64(&scanner.crrStat.FailNum),
+					SkipNum:    atomic.LoadInt64(&scanner.crrStat.SkipNum),
+				},
+			}
+			resp.CRRScanningTasks[scanner.taskId] = info
 		}
 		l.scannerMutex.RUnlock()
 
@@ -185,5 +199,37 @@ func (l *LcNode) opSnapshotVerDel(conn net.Conn, p *proto.Packet) (err error) {
 	l.startSnapshotScan(adminTask)
 	l.respondToMaster(adminTask)
 
+	return
+}
+
+func (l *LcNode) opCRRScan(conn net.Conn, p *proto.Packet) (err error) {
+	go func() {
+		p.PacketOkReply()
+		if err := p.WriteToConn(conn); err != nil {
+			log.LogErrorf("ack master response: %s", err.Error())
+		}
+	}()
+
+	data := p.Data
+	var (
+		req       = &proto.CRRTaskRequest{}
+		resp      = &proto.CRRTaskResponse{}
+		adminTask = &proto.AdminTask{
+			Request: req,
+		}
+	)
+	decoder := json.NewDecoder(bytes.NewBuffer(data))
+	decoder.UseNumber()
+
+	if err = decoder.Decode(adminTask); err != nil {
+		resp.Status = proto.TaskFailed
+		resp.Result = err.Error()
+		adminTask.Response = resp
+		l.respondToMaster(adminTask)
+		return
+	}
+	l.startCRRScan(adminTask)
+	// master will delete this adminTask from taskMgr
+	l.respondToMaster(adminTask)
 	return
 }
