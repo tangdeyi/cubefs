@@ -409,6 +409,7 @@ func getDirList(ctx context.Context, vol sdk.IVolume, ino uint64, marker string)
 		}
 		ino = dirInfo.Inode
 		if i == len(dirs)-1 {
+			dirInfo.Name = curMarker
 			info = dirInfo
 		}
 		if fileType == typeFile {
@@ -438,19 +439,19 @@ func recursiveScan(ctx context.Context, vol sdk.IVolume, stack *list.List, marke
 				fileType = typeFolder
 			}
 
-			marker = filepath.Join(e.marker, dirInfo.Name)
+			filePath := filepath.Join(e.marker, dirInfo.Name)
 
 			result.Files = append(result.Files, FileInfo{
 				ID:   dirInfo.FileId,
 				Ino:  dirInfo.Inode,
-				Name: marker,
+				Name: filePath,
 				Type: fileType,
 			})
 			if len(result.Files) >= limit {
 				return nil
 			}
 			if fileType == typeFolder {
-				stack.PushBack(&stackElement{dirInfo.Inode, dirInfo.Name, marker})
+				stack.PushBack(&stackElement{dirInfo.Inode, dirInfo.Name, filePath})
 				needPop = false
 				break
 			}
@@ -522,7 +523,7 @@ func (d *DriveNode) handleListAll(c *rpc.Context) {
 		result.Files = append(result.Files, FileInfo{
 			ID:   dirInfo.FileId,
 			Ino:  dirInfo.Inode,
-			Name: marker,
+			Name: dirInfo.Name,
 			Type: fileType,
 		})
 	}
