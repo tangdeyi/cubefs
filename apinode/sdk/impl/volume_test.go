@@ -769,7 +769,7 @@ func Test_volume_ReadDirAll(t *testing.T) {
 	{
 		// failed // ReadDirLimit_ll(parentID uint64, from string, limit uint64) ([]proto.Dentry, error)
 		mockMeta.EXPECT().ReadDirLimit_ll(parIno, any, any).Return(nil, syscall.ENOENT)
-		_, err = v.ReadDirAll(ctx, parIno)
+		_, err = v.ReadDirAll(ctx, parIno, "")
 		require.Equal(t, err, syscallToErr(syscall.ENOENT))
 	}
 	{
@@ -778,7 +778,7 @@ func Test_volume_ReadDirAll(t *testing.T) {
 			{Inode: 12},
 		}
 		mockMeta.EXPECT().ReadDirLimit_ll(parIno, any, any).Return(dirs, nil)
-		_, err = v.ReadDirAll(ctx, parIno)
+		_, err = v.ReadDirAll(ctx, parIno, "")
 		require.NoError(t, err)
 	}
 }

@@ -387,13 +387,16 @@ type stackElement struct {
 func getDirList(ctx context.Context, vol sdk.IVolume, ino uint64, marker string) (*list.List, *sdk.DirInfo, error) {
 	var info *sdk.DirInfo
 	stack := list.New()
-	curMarker := ""
-	stack.PushBack(&stackElement{ino, "", curMarker})
+	if marker == "" {
+		stack.PushBack(&stackElement{ino: ino})
+		return stack, nil, nil
+	}
+
+	curName := ""
 	dirs := strings.Split(marker, "/")
 	for i, dir := range dirs {
-		if dir == "" || dir == "." {
-			continue
-		}
+		stack.PushBack(&stackElement{ino: ino, name: curName, marker: dir})
+
 		dirInfo, err := vol.Lookup(ctx, ino, dir)
 		if err == sdk.ErrNotFound {
 			break
@@ -401,57 +404,58 @@ func getDirList(ctx context.Context, vol sdk.IVolume, ino uint64, marker string)
 			return nil, nil, err
 		}
 
-		fileType := typeFile
-		curMarker = filepath.Join(curMarker, dirInfo.Name)
-		if dirInfo.IsDir() {
-			fileType = typeFolder
-			stack.PushBack(&stackElement{dirInfo.Inode, dirInfo.Name, curMarker})
-		}
+		curName = filepath.Join(curName, dirInfo.Name)
+
 		ino = dirInfo.Inode
 		if i == len(dirs)-1 {
-			dirInfo.Name = curMarker
+			dirInfo.Name = curName
 			info = dirInfo
+			if dirInfo.IsDir() {
+				stack.PushBack(&stackElement{ino: ino, name: curName})
+			}
 		}
-		if fileType == typeFile {
+		if !dirInfo.IsDir() {
 			break
 		}
 	}
 	return stack, info, nil
 }
 
-func recursiveScan(ctx context.Context, vol sdk.IVolume, stack *list.List, marker string, limit int, result *ListAllResult) error {
+func recursiveScan(ctx context.Context, vol sdk.IVolume, stack *list.List, limit int, result *ListAllResult) error {
 	for stack.Len() > 0 {
 		elem := stack.Back()
 		e := elem.Value.(*stackElement)
 
-		dirInfos, err := vol.ReadDirAll(ctx, e.ino)
+		dirInfos, err := vol.ReadDirAll(ctx, e.ino, e.marker)
 		if err != nil {
 			return err
 		}
 		needPop := true
+
 		for _, dirInfo := range dirInfos {
-			if filepath.Join(e.marker, dirInfo.Name) <= marker {
+			if dirInfo.Name <= e.marker {
 				continue
 			}
+			e.marker = dirInfo.Name
 
 			fileType := typeFile
 			if dirInfo.IsDir() {
 				fileType = typeFolder
 			}
 
-			filePath := filepath.Join(e.marker, dirInfo.Name)
+			curName := filepath.Join(e.name, dirInfo.Name)
 
 			result.Files = append(result.Files, FileInfo{
 				ID:   dirInfo.FileId,
 				Ino:  dirInfo.Inode,
-				Name: filePath,
+				Name: curName,
 				Type: fileType,
 			})
 			if len(result.Files) >= limit {
 				return nil
 			}
 			if fileType == typeFolder {
-				stack.PushBack(&stackElement{dirInfo.Inode, dirInfo.Name, filePath})
+				stack.PushBack(&stackElement{ino: dirInfo.Inode, name: curName})
 				needPop = false
 				break
 			}
@@ -478,6 +482,11 @@ func (d *DriveNode) handleListAll(c *rpc.Context) {
 		limit = 10000
 	}
 	limit += 1
+
+	if len(marker) > 0 && marker[0] == '/' {
+		d.respError(c, sdk.ErrBadRequest.Extend(marker))
+		return
+	}
 
 	var pathIno Inode
 
@@ -528,7 +537,7 @@ func (d *DriveNode) handleListAll(c *rpc.Context) {
 		})
 	}
 
-	if err = recursiveScan(ctx, vol, stack, marker, limit, &result); err != nil {
+	if err = recursiveScan(ctx, vol, stack, limit, &result); err != nil {
 		d.respError(c, err)
 		return
 	}

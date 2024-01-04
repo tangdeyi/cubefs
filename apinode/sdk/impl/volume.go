@@ -206,9 +206,8 @@ func (v *volume) Rename(ctx context.Context, srcParIno, dstParIno uint64, srcNam
 	return nil
 }
 
-func (v *volume) ReadDirAll(ctx context.Context, ino uint64) ([]sdk.DirInfo, error) {
+func (v *volume) ReadDirAll(ctx context.Context, ino uint64, marker string) ([]sdk.DirInfo, error) {
 	span := trace.SpanFromContextSafe(ctx)
-	marker := ""
 	count := 1000
 	total := make([]sdk.DirInfo, 0)
 
@@ -234,7 +233,7 @@ func (v *volume) ReadDirAll(ctx context.Context, ino uint64) ([]sdk.DirInfo, err
 func (v *volume) getStatByIno(ctx context.Context, ino uint64) (info *sdk.StatFs, err error) {
 	span := trace.SpanFromContextSafe(ctx)
 	info = new(sdk.StatFs)
-	entArr, err := v.ReadDirAll(ctx, ino)
+	entArr, err := v.ReadDirAll(ctx, ino, "")
 	if err != nil {
 		span.Errorf("readirAll failed, ino %d, err %s", ino, err.Error())
 		return nil, syscallToErr(err)

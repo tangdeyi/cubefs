@@ -308,7 +308,7 @@ func TestHandleListAll(t *testing.T) {
 			}
 			return nil, sdk.ErrNotFound
 		}).AnyTimes()
-		node.Volume.EXPECT().ReadDirAll(A, A).DoAndReturn(func(ctx context.Context, ino uint64) ([]sdk.DirInfo, error) {
+		node.Volume.EXPECT().ReadDirAll(A, A, A).DoAndReturn(func(ctx context.Context, ino uint64, _ string) ([]sdk.DirInfo, error) {
 			dirInfos := []sdk.DirInfo{}
 			if ino == 100 || ino == 200 || ino == 300 {
 				for i := 1; i <= 10; i++ {

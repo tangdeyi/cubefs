@@ -127,7 +127,7 @@ func testDirOp(ctx context.Context, vol sdk.IVolume) {
 
 	// readdirAll
 	var items []sdk.DirInfo
-	items, err = vol.ReadDirAll(ctx, dirIfo.Inode)
+	items, err = vol.ReadDirAll(ctx, dirIfo.Inode, "")
 	if err != nil {
 		span.Fatalf("read dir failed, ino %d, err %s", dirIfo.Inode, err.Error())
 	}
