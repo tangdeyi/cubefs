@@ -219,8 +219,12 @@ func (v *volume) ReadDirAll(ctx context.Context, ino uint64) ([]sdk.DirInfo, err
 			return nil, syscallToErr(err)
 		}
 
+		if marker != "" && len(dirs) > 0 && dirs[0].Name == marker {
+			dirs = dirs[1:]
+		}
+
 		total = append(total, dirs...)
-		if len(dirs) < count {
+		if len(dirs) < count-1 {
 			return total, nil
 		}
 		marker = dirs[len(dirs)-1].Name
