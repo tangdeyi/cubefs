@@ -15,10 +15,12 @@
 package drive
 
 import (
+	"sync"
 	"time"
 
 	"github.com/cubefs/cubefs/apinode/sdk"
 	"github.com/cubefs/cubefs/blobstore/common/rpc"
+	"github.com/cubefs/cubefs/blobstore/util/taskpool"
 )
 
 type GetPropertiesResult = FileInfo
@@ -139,16 +141,97 @@ func (d *DriveNode) handleGetProperties(c *rpc.Context) {
 	}
 	res := GetPropertiesResult{
 		ID:         dirInfo.FileId,
-		Name:       dirInfo.Name,
-		Type:       typeFile,
+		Path:       args.Path.String(),
+		Type:       fileInfoType(dirInfo.IsDir()),
 		Size:       int64(inoInfo.Size),
 		Ctime:      inoInfo.CreateTime.Unix(),
 		Mtime:      inoInfo.ModifyTime.Unix(),
 		Atime:      inoInfo.AccessTime.Unix(),
 		Properties: removeInternalMeta(xattrs),
 	}
-	if dirInfo.IsDir() {
-		res.Type = typeFolder
-	}
 	d.respData(c, res)
+}
+
+func (d *DriveNode) handleBatchGetProperties(c *rpc.Context) {
+	args := ArgsBatchPath{}
+	ctx, span := d.ctxSpan(c)
+	if d.checkError(c, func(err error) { span.Error(err) }, c.ParseArgs(&args)) {
+		return
+	}
+	files := args.Paths
+	for idx := range files {
+		if err := files[idx].Clean(true); err != nil {
+			d.respError(c, err)
+			return
+		}
+	}
+	uid := d.userID(c, nil)
+	ur, vol, err := d.getUserRouterAndVolume(ctx, uid)
+	if err != nil {
+		d.respError(c, err)
+		return
+	}
+
+	var respLock sync.Mutex
+	resp := BatchUploadFileResult{
+		Success: []FileInfo{},
+		Errors:  []ErrorEntry{},
+	}
+
+	addErr := func(path string, e error) {
+		rpcErr := rpc.Error2HTTPError(e)
+		respLock.Lock()
+		resp.Errors = append(resp.Errors, ErrorEntry{
+			Path:    path,
+			Status:  rpcErr.StatusCode(),
+			Code:    rpcErr.ErrorCode(),
+			Message: rpcErr.Error(),
+		})
+		respLock.Unlock()
+	}
+
+	pool := taskpool.New(8, 8)
+	var wg sync.WaitGroup
+	wg.Add(len(files))
+	for i := range files {
+		idx := i
+		pool.Run(func() {
+			defer wg.Done()
+
+			path := files[idx].String()
+			dirInfo, err := d.lookup(withNoTraceLog(ctx), vol, ur.RootFileID, path)
+			if err != nil {
+				addErr(path, err)
+				return
+			}
+			xattrs, err := vol.GetXAttrMap(ctx, dirInfo.Inode)
+			if err != nil {
+				addErr(path, err)
+				return
+			}
+			inoInfo, err := vol.GetInode(ctx, dirInfo.Inode)
+			if err != nil {
+				addErr(path, err)
+				return
+			}
+
+			respLock.Lock()
+			resp.Success = append(resp.Success, FileInfo{
+				ID:         dirInfo.FileId,
+				Path:       path,
+				Type:       fileInfoType(dirInfo.IsDir()),
+				Size:       int64(inoInfo.Size),
+				Ctime:      inoInfo.CreateTime.Unix(),
+				Mtime:      inoInfo.ModifyTime.Unix(),
+				Atime:      inoInfo.AccessTime.Unix(),
+				Properties: removeInternalMeta(xattrs),
+			})
+			respLock.Unlock()
+		})
+	}
+	wg.Wait()
+	pool.Close()
+
+	span.Infof("batch get properties success(%d) error(%d)", len(resp.Success), len(resp.Errors))
+	d.respData(c, resp)
 }

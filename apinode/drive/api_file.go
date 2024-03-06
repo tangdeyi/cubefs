@@ -17,6 +17,7 @@ package drive
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/md5"
 	"encoding/hex"
@@ -39,10 +40,15 @@ var bytesPool = sync.Pool{
 	},
 }
 
+type ArgsBatchPath struct {
+	Paths []FilePath `json:"paths"`
+}
+
 // ArgsFileUpload file upload argument.
 type ArgsFileUpload struct {
 	Path   FilePath `json:"path"`
 	FileID uint64   `json:"fileId,omitempty"`
+	Force  bool     `json:"force,omitempty"`
 }
 
 func (d *DriveNode) handleFileUpload(c *rpc.Context) {
@@ -66,7 +72,7 @@ func (d *DriveNode) handleFileUpload(c *rpc.Context) {
 	}
 
 	if d.checkError(c, func(err error) { span.Errorf("lookup %+v error: %v", args, err) },
-		d.lookupFileID(ctx, vol, ino, filename, args.FileID)) {
+		d.lookupFileID(ctx, vol, ino, filename, &args.FileID, args.Force)) {
 		return
 	}
 
@@ -105,13 +111,13 @@ func (d *DriveNode) handleFileUpload(c *rpc.Context) {
 	}
 
 	d.out.Publish(ctx, makeOpLog(OpUploadFile, d.requestID(c), uid, string(args.Path), "size", inode.Size))
-	d.respData(c, inode2file(inode, fileID, filename, extend))
+	d.respData(c, inode2file(inode, fileID, args.Path.String(), extend))
 }
 
 // BatchUploadFileResult response of batch uploads.
 type BatchUploadFileResult struct {
-	Uploaded []FileInfo   `json:"uploaded"`
-	Errors   []ErrorEntry `json:"error"`
+	Success []FileInfo   `json:"success"`
+	Errors  []ErrorEntry `json:"error"`
 }
 
 type uploadFilePipe struct {
@@ -131,11 +137,21 @@ func (d *DriveNode) handleFileUploadBatch(c *rpc.Context) {
 
 	var respLock sync.Mutex
 	resp := BatchUploadFileResult{
-		Uploaded: []FileInfo{},
-		Errors:   []ErrorEntry{},
+		Success: []FileInfo{},
+		Errors:  []ErrorEntry{},
 	}
 
-	tr := tar.NewReader(c.Request.Body)
+	reqBody := c.Request.Body
+	if c.Request.Header.Get(HeaderContentEncoding) == gzipEncoding {
+		reqBody, errx = gzip.NewReader(reqBody)
+		if errx != nil {
+			span.Warn(errx)
+			d.respError(c, sdk.ErrBadRequest.Extend(errx))
+			return
+		}
+		defer reqBody.Close()
+	}
+	tr := tar.NewReader(reqBody)
 	addErr := func(path string, e error) {
 		rpcErr := rpc.Error2HTTPError(e)
 		respLock.Lock()
@@ -209,6 +225,14 @@ func (d *DriveNode) handleFileUploadBatch(c *rpc.Context) {
 			}
 			args.FileID = id
 		}
+		if force := hdr.PAXRecords[PAXForce]; force != "" {
+			bl, errx := strconv.ParseBool(force)
+			if errx != nil {
+				addErr(path, sdk.ErrBadRequest.Extend("parse force", errx))
+				return
+			}
+			args.Force = bl
+		}
 
 		dir, filename := args.Path.Split()
 		ino, _, err := d.createDir(withNoTraceLog(ctx), vol, root, dir.String(), true)
@@ -218,7 +242,7 @@ func (d *DriveNode) handleFileUploadBatch(c *rpc.Context) {
 			return
 		}
 
-		if err = d.lookupFileID(withNoTraceLog(ctx), vol, ino, filename, args.FileID); err != nil {
+		if err = d.lookupFileID(withNoTraceLog(ctx), vol, ino, filename, &args.FileID, args.Force); err != nil {
 			span.Warnf("lookup %+v error: %v", args, err)
 			addErr(path, err)
 			return
@@ -267,7 +291,7 @@ func (d *DriveNode) handleFileUploadBatch(c *rpc.Context) {
 
 		d.out.Publish(context.Background(), makeOpLog(OpUploadFile, d.requestID(c), uid, args.Path.String(), "size", inode.Size))
 		respLock.Lock()
-		resp.Uploaded = append(resp.Uploaded, *inode2file(inode, fileID, args.Path.String(), extend))
+		resp.Success = append(resp.Success, *inode2file(inode, fileID, args.Path.String(), extend))
 		respLock.Unlock()
 	}
 
@@ -289,7 +313,7 @@ func (d *DriveNode) handleFileUploadBatch(c *rpc.Context) {
 	wg.Wait()
 	span.AppendTrackLog("cfubw", st, nil)
 
-	span.Infof("batch uploaded(%d) error(%d)", len(resp.Uploaded), len(resp.Errors))
+	span.Infof("batch upload success(%d) error(%d)", len(resp.Success), len(resp.Errors))
 	d.respData(c, resp)
 }
 
@@ -589,20 +613,18 @@ func (d *DriveNode) handleFileDownload(c *rpc.Context) {
 	span.AppendRPCTrackLog([]string{fmt.Sprintf("cfdw:%d", dur)})
 }
 
-// ArgsFileDownloadBatch files download.
-type ArgsFileDownloadBatch []FilePath
-
 type downloadFilePipe struct {
 	hdr     *tar.Header
 	content io.Reader
 }
 
 func (d *DriveNode) handleFileDownloadBatch(c *rpc.Context) {
-	files := ArgsFileDownloadBatch{}
+	args := ArgsBatchPath{}
 	ctx, span := d.ctxSpan(c)
-	if d.checkError(c, func(err error) { span.Error(err) }, c.ParseArgs(&files)) {
+	if d.checkError(c, func(err error) { span.Error(err) }, c.ParseArgs(&args)) {
 		return
 	}
+	files := args.Paths
 	for idx := range files {
 		if err := files[idx].Clean(true); err != nil {
 			d.respError(c, err)
@@ -623,6 +645,12 @@ func (d *DriveNode) handleFileDownloadBatch(c *rpc.Context) {
 		return
 	}
 
+	var pipeEncode io.WriteCloser = pipeW
+	gzipped := c.Request.Header.Get(HeaderAcceptEncoding) == gzipEncoding
+	if gzipped {
+		pipeEncode = gzip.NewWriter(pipeW)
+		c.Writer.Header().Set(HeaderContentEncoding, gzipEncoding)
+	}
 	c.Writer.Header().Set(rpc.HeaderContentType, "application/x-tar")
 	c.RespondStatus(http.StatusOK)
 
@@ -717,7 +745,7 @@ func (d *DriveNode) handleFileDownloadBatch(c *rpc.Context) {
 		close(filePipe)
 	}()
 
-	tw := tar.NewWriter(pipeW)
+	tw := tar.NewWriter(pipeEncode)
 	for tarFile := range filePipe {
 		if err = tw.WriteHeader(tarFile.hdr); err != nil {
 			span.Warn(err)
@@ -734,6 +762,9 @@ func (d *DriveNode) handleFileDownloadBatch(c *rpc.Context) {
 	for range filePipe {
 	}
 	tw.Flush()
+	if gzipped {
+		pipeEncode.Close()
+	}
 	pipeW.Close()
 	<-done
 }
@@ -808,6 +839,7 @@ func (d *DriveNode) handleFileRename(c *rpc.Context) {
 		return
 	}
 
+	span.Infof("parent ino of src(%d) dst(%d)", srcParentIno, dstParentIno)
 	err = vol.Rename(ctx, srcParentIno.Uint64(), dstParentIno.Uint64(), srcName, dstName)
 	if d.checkError(c, func(err error) { span.Error("rename error", args, err) }, err) {
 		return

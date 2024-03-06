@@ -75,7 +75,7 @@ func (d *DriveNode) handleFilesDelete(c *rpc.Context) {
 
 	uid := d.userID(c, &args.Path)
 	if args.Recursive {
-		d.recursivelyDelete(c, uid, args.Path)
+		d.recursivelyCheck(c, uid, args.Path, true)
 		return
 	}
 
@@ -98,12 +98,61 @@ func (d *DriveNode) handleFilesDelete(c *rpc.Context) {
 	c.Respond()
 }
 
+// ArgsHeadEmpty files head empty argument.
+type ArgsHeadEmpty struct {
+	Path      FilePath `json:"path"`
+	Recursive bool     `json:"recursive,omitempty"`
+}
+
+func (d *DriveNode) handleFilesHeadEmpty(c *rpc.Context) {
+	args := new(ArgsHeadEmpty)
+	ctx, span := d.ctxSpan(c)
+	if d.checkError(c, func(err error) { span.Error(err) }, c.ParseArgs(args), args.Path.Clean(false)) {
+		return
+	}
+	span.Info("to head empty", args)
+
+	uid := d.userID(c, &args.Path)
+	if args.Recursive {
+		d.recursivelyCheck(c, uid, args.Path, false)
+		return
+	}
+
+	ur, vol, err := d.getUserRouterAndVolume(ctx, uid)
+	if d.checkError(c, func(err error) { span.Warn(err) }, err, ur.CanWrite()) {
+		return
+	}
+	root := ur.RootFileID
+
+	dirInode, err := d.lookup(ctx, vol, root, args.Path.String())
+	if d.checkError(c, func(err error) { span.Warn("lookup", args.Path, err) }, err) {
+		return
+	}
+	if !dirInode.IsDir() {
+		span.Errorf("path=%s is not a directory", args.Path)
+		d.respError(c, sdk.ErrNotDir)
+		return
+	}
+
+	files, err := vol.Readdir(ctx, dirInode.Inode, "", 1)
+	if d.checkError(c, func(err error) { span.Warn("readdir", args.Path, err) }, err) {
+		return
+	}
+	if len(files) > 0 {
+		span.Errorf("path=%s is not empty", args.Path)
+		d.respError(c, sdk.ErrNotEmpty)
+		return
+	}
+	c.Respond()
+}
+
 type delDir struct {
 	parent Inode
 	name   string
+	ignore bool
 }
 
-func (d *DriveNode) recursivelyDelete(c *rpc.Context, uid UserID, path FilePath) {
+func (d *DriveNode) recursivelyCheck(c *rpc.Context, uid UserID, path FilePath, toDelete bool) {
 	ctx, span := d.ctxSpan(c)
 
 	ur, vol, err := d.getUserRouterAndVolume(ctx, uid)
@@ -126,7 +175,7 @@ func (d *DriveNode) recursivelyDelete(c *rpc.Context, uid UserID, path FilePath)
 		ino = Inode(parent.Inode)
 	}
 
-	nextLayer := []delDir{{parent: ino, name: name}}
+	nextLayer := []delDir{{parent: ino, name: name, ignore: true}}
 	layerDirs := make([][]delDir, 0, 4)
 	layerDirs = append(layerDirs, nextLayer[:])
 
@@ -145,18 +194,19 @@ func (d *DriveNode) recursivelyDelete(c *rpc.Context, uid UserID, path FilePath)
 				d.respError(c, sdk.ErrNotEmpty)
 				return
 			}
+			// if !dir.ignore {
+			// 	if vol.IsSnapshotInode(ctx, dirInfo.Inode) {
+			// 		span.Info("sub name is snapshot:", dir)
+			// 		d.respError(c, sdk.ErrNotEmpty.Extend("has snapshot dir"))
+			// 		return
+			// 	}
+			// }
 
-			var files []FileInfo
-			files, err = d.listDir(ctx, dirInfo.Inode, vol, "", 10000)
+			var files []sdk.DirInfo
+			files, err = vol.ReadDirAll(ctx, dirInfo.Inode, "")
 			if d.checkError(c, func(err error) { span.Warn(err) }, err) {
 				return
 			}
-			if len(files) >= 10000 {
-				span.Error("too many dirs in dir:", dirInfo)
-				d.respError(c, sdk.ErrInternalServerError.Extend("too many dirs"))
-				return
-			}
-
 			for _, file := range files {
 				if !file.IsDir() {
 					span.Info("sub name was not dir:", file)
@@ -172,6 +222,11 @@ func (d *DriveNode) recursivelyDelete(c *rpc.Context, uid UserID, path FilePath)
 			layerDirs = append(layerDirs, thisLayer[:])
 		}
 		nextLayer = thisLayer
+	}
+
+	if !toDelete {
+		c.Respond()
+		return
 	}
 
 	span.Debug("to delete dirs", layerDirs)
@@ -192,10 +247,6 @@ func (d *DriveNode) recursivelyDelete(c *rpc.Context, uid UserID, path FilePath)
 	c.Respond()
 }
 
-type ArgsBatchDelete struct {
-	Paths []FilePath `json:"paths"`
-}
-
 type ErrorEntry struct {
 	Path    string `json:"path"`
 	Status  int    `json:"status"`
@@ -209,13 +260,14 @@ type BatchDeleteResult struct {
 }
 
 func (d *DriveNode) handleBatchDelete(c *rpc.Context) {
-	args := new(ArgsBatchDelete)
+	args := new(ArgsBatchPath)
 	ctx, span := d.ctxSpan(c)
 	if d.checkError(c, func(err error) { span.Error(err) }, c.ParseArgs(args)) {
 		return
 	}
 
-	ur, vol, err := d.getUserRouterAndVolume(ctx, d.userID(c, nil))
+	uid := d.userID(c, nil)
+	ur, vol, err := d.getUserRouterAndVolume(ctx, uid)
 	if d.checkError(c, func(err error) { span.Warnf("get root inode and volume: %v", err) }, err, ur.CanWrite()) {
 		return
 	}
@@ -236,7 +288,7 @@ func (d *DriveNode) handleBatchDelete(c *rpc.Context) {
 		pool.Run(func() {
 			defer wg.Done()
 			arg := name.String()
-			if err := name.Clean(false); err != nil {
+			if err := name.Clean(true); err != nil {
 				span.Infof("invalid path %s", arg)
 				ch <- result{arg, err}
 				return

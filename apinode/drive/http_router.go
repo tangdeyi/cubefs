@@ -30,10 +30,10 @@ import (
 
 // RegisterAPIRouters register drive api handler.
 func (d *DriveNode) RegisterAPIRouters() *rpc.Router {
-	rpc.RegisterArgsParser(&ArgsListDir{}, "json")
-	rpc.RegisterArgsParser(&ArgsListAll{}, "json")
 	rpc.RegisterArgsParser(&ArgsProperties{}, "json")
 	rpc.RegisterArgsParser(&ArgsMkDir{}, "json")
+	rpc.RegisterArgsParser(&ArgsDelete{}, "json")
+	rpc.RegisterArgsParser(&ArgsHeadEmpty{}, "json")
 
 	rpc.RegisterArgsParser(&ArgsFileUpload{}, "json")
 	rpc.RegisterArgsParser(&ArgsFileWrite{}, "json")
@@ -41,7 +41,6 @@ func (d *DriveNode) RegisterAPIRouters() *rpc.Router {
 	rpc.RegisterArgsParser(&ArgsFileDownload{}, "json")
 	rpc.RegisterArgsParser(&ArgsFileRename{}, "json")
 	rpc.RegisterArgsParser(&ArgsFileCopy{}, "json")
-	rpc.RegisterArgsParser(&ArgsDelete{}, "json")
 
 	rpc.RegisterArgsParser(&ArgsMPUploads{}, "json")
 	rpc.RegisterArgsParser(&ArgsMPUpload{}, "json")
@@ -54,9 +53,10 @@ func (d *DriveNode) RegisterAPIRouters() *rpc.Router {
 	// set request id and user id at interceptors.
 	r.Use(d.setHeaders)
 
-	r.Handle(http.MethodGet, "/v1/files", d.handleListDir, rpc.OptArgsQuery())
+	r.Handle(http.MethodPost, "/v1/files", d.handleListDir, rpc.OptArgsBody())
 	r.Handle(http.MethodDelete, "/v1/files", d.handleFilesDelete, rpc.OptArgsQuery())
-	r.Handle(http.MethodGet, "/v1/files/recursive", d.handleListAll, rpc.OptArgsQuery())
+	r.Handle(http.MethodHead, "/v1/files/empty", d.handleFilesHeadEmpty, rpc.OptArgsQuery())
+	r.Handle(http.MethodPost, "/v1/files/recursive", d.handleListAll, rpc.OptArgsBody())
 	r.Handle(http.MethodDelete, "/v1/files/batch", d.handleBatchDelete, rpc.OptArgsBody())
 	r.Handle(http.MethodPost, "/v1/files/mkdir", d.handleMkDir, rpc.OptArgsQuery())
 
@@ -79,6 +79,7 @@ func (d *DriveNode) RegisterAPIRouters() *rpc.Router {
 	r.Handle(http.MethodPut, "/v1/files/properties", d.handleSetProperties, rpc.OptArgsQuery())
 	r.Handle(http.MethodDelete, "/v1/files/properties", d.handleDelProperties, rpc.OptArgsQuery())
 	r.Handle(http.MethodGet, "/v1/files/properties", d.handleGetProperties, rpc.OptArgsQuery())
+	r.Handle(http.MethodPost, "/v1/files/properties", d.handleBatchGetProperties, rpc.OptArgsBody())
 
 	r.Handle(http.MethodPost, "/v1/snapshot", d.handleCreateSnapshot, rpc.OptArgsQuery())
 	r.Handle(http.MethodDelete, "/v1/snapshot", d.handleDeleteSnapshot, rpc.OptArgsQuery())

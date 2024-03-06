@@ -17,6 +17,7 @@ package drive
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/md5"
 	"encoding/hex"
@@ -92,7 +93,7 @@ func TestHandleFileUpload(t *testing.T) {
 	{
 		node.OnceGetUser()
 		node.Volume.EXPECT().Lookup(A, A, A).Return(&sdk.DirInfo{Inode: 1000}, nil)
-		resp := doRequest(newMockBody(64), "path", "/a", "fileId", "1111")
+		resp := doRequest(newMockBody(64), "path", "/a", "fileId", "1111", "force", "true")
 		defer resp.Body.Close()
 		require.Equal(t, sdk.ErrConflict.Status, resp.StatusCode)
 	}
@@ -123,20 +124,40 @@ func TestHandleFileUpload(t *testing.T) {
 	{
 		node.OnceGetUser()
 		node.OnceLookup(true)
-		node.Volume.EXPECT().Lookup(A, A, A).Return(&sdk.DirInfo{Inode: 1000}, nil)
+		node.Volume.EXPECT().Lookup(A, A, A).Return(&sdk.DirInfo{Inode: 1000, FileId: 100}, nil)
 		node.Volume.EXPECT().UploadFile(A, A).DoAndReturn(
 			func(_ context.Context, req *sdk.UploadFileReq) (*sdk.InodeInfo, uint64, error) {
 				req.Callback()
 				return &sdk.InodeInfo{Inode: node.GenInode()}, uint64(100), nil
 			})
-		resp := doRequest(newMockBody(64), "path", "/dir/a/../filename")
+		resp := doRequest(newMockBody(64), "path", "/dir/a/../filename", "fileId", "100", "force", "false")
 		defer resp.Body.Close()
 		require.Equal(t, 200, resp.StatusCode)
 
 		buff, _ := io.ReadAll(resp.Body)
 		var file FileInfo
 		require.NoError(t, json.Unmarshal(buff, &file))
-		require.Equal(t, "filename", file.Name)
+		require.Equal(t, "/dir/filename", file.Path)
+		require.Equal(t, "Uploaded-", file.Properties["upload"])
+		require.Equal(t, 32, len(file.Properties[internalMetaMD5]))
+	}
+	{
+		node.OnceGetUser()
+		node.OnceLookup(true)
+		node.Volume.EXPECT().Lookup(A, A, A).Return(&sdk.DirInfo{Inode: 1000, FileId: 100}, nil)
+		node.Volume.EXPECT().UploadFile(A, A).DoAndReturn(
+			func(_ context.Context, req *sdk.UploadFileReq) (*sdk.InodeInfo, uint64, error) {
+				req.Callback()
+				return &sdk.InodeInfo{Inode: node.GenInode()}, uint64(100), nil
+			})
+		resp := doRequest(newMockBody(64), "path", "/dir/a/../filename", "force", "true")
+		defer resp.Body.Close()
+		require.Equal(t, 200, resp.StatusCode)
+
+		buff, _ := io.ReadAll(resp.Body)
+		var file FileInfo
+		require.NoError(t, json.Unmarshal(buff, &file))
+		require.Equal(t, "/dir/filename", file.Path)
 		require.Equal(t, "Uploaded-", file.Properties["upload"])
 		require.Equal(t, 32, len(file.Properties[internalMetaMD5]))
 	}
@@ -148,10 +169,12 @@ func TestHandleFileBatchUpload(t *testing.T) {
 	server, client := newTestServer(d)
 	defer server.Close()
 
+	headerEncoding := ""
 	doRequest := func(body *bytes.Buffer, data interface{}) rpc.HTTPError {
 		url := genURL(server.URL, "/v1/files/uploads")
 		req, _ := http.NewRequest(http.MethodPost, url, body)
 		req.Header.Add(HeaderUserID, testUserID.ID)
+		req.Header.Add(HeaderContentEncoding, headerEncoding)
 		resp, err := client.Do(Ctx, req)
 		require.NoError(t, err)
 		defer resp.Body.Close()
@@ -165,13 +188,11 @@ func TestHandleFileBatchUpload(t *testing.T) {
 		require.Equal(t, status, res.Errors[0].Status, res.Errors[0].Message)
 	}
 	{
-		node.TestGetUser(t, func() rpc.HTTPError {
-			return doRequest(buf, nil)
-		}, testUserID)
+		node.TestGetUser(t, func() rpc.HTTPError { return doRequest(buf, nil) }, testUserID)
 		node.OnceGetUser()
 		resp := doRequest(buf, &res)
 		require.NoError(t, resp)
-		require.Equal(t, 0, len(res.Uploaded))
+		require.Equal(t, 0, len(res.Success))
 	}
 	{
 		buf.Write(newMockBody(54).buff)
@@ -185,6 +206,7 @@ func TestHandleFileBatchUpload(t *testing.T) {
 			{Name: ""},
 			{Name: "../../file"},
 			{Name: "/file", Format: tar.FormatPAX, PAXRecords: map[string]string{PAXFileID: "x32"}},
+			{Name: "/file", Format: tar.FormatPAX, PAXRecords: map[string]string{PAXForce: "not-bool"}},
 		} {
 			node.OnceGetUser()
 			tw := tar.NewWriter(buf)
@@ -211,7 +233,7 @@ func TestHandleFileBatchUpload(t *testing.T) {
 		require.NoError(t, err)
 	}
 	{
-		node.OnceGetUser()
+		node.GetUserN2()
 		hdr.Name = "/it's/a/../a/file"
 		writeBuff()
 		// create dir error
@@ -221,9 +243,10 @@ func TestHandleFileBatchUpload(t *testing.T) {
 		hdr.Name = "/file"
 		buf.Reset()
 	}
+	node.GetUserAny()
 	{
-		node.OnceGetUser()
 		hdr.PAXRecords[PAXFileID] = "1000"
+		hdr.PAXRecords[PAXForce] = "1"
 		writeBuff()
 		node.Volume.EXPECT().Lookup(A, A, A).Return(nil, e2)
 		require.NoError(t, doRequest(buf, &res))
@@ -232,7 +255,6 @@ func TestHandleFileBatchUpload(t *testing.T) {
 	}
 	node.Volume.EXPECT().Lookup(A, A, A).Return(&sdk.DirInfo{Inode: 1000, FileId: 1000}, nil).AnyTimes()
 	{
-		node.OnceGetUser()
 		hdr.PAXRecords[PAXCrc32] = "not-number"
 		writeBuff()
 		require.NoError(t, doRequest(buf, &res))
@@ -245,7 +267,6 @@ func TestHandleFileBatchUpload(t *testing.T) {
 	}
 	{
 		hdr.PAXRecords[UserPropertyPrefix+internalMetaMD5] = "internal"
-		node.OnceGetUser()
 		writeBuff()
 		require.NoError(t, doRequest(buf, &res))
 		hasError(400)
@@ -253,7 +274,6 @@ func TestHandleFileBatchUpload(t *testing.T) {
 		delete(hdr.PAXRecords, UserPropertyPrefix+internalMetaMD5)
 	}
 	{
-		node.OnceGetUser()
 		writeBuff()
 		node.Volume.EXPECT().UploadFile(A, A).Return(nil, uint64(0), e3)
 		require.NoError(t, doRequest(buf, &res))
@@ -262,7 +282,6 @@ func TestHandleFileBatchUpload(t *testing.T) {
 	}
 	{
 		hdr.PAXRecords[PAXMD5] = "md5"
-		node.OnceGetUser()
 		writeBuff()
 		node.Volume.EXPECT().UploadFile(A, A).DoAndReturn(
 			func(_ context.Context, req *sdk.UploadFileReq) (*sdk.InodeInfo, uint64, error) {
@@ -287,14 +306,13 @@ func TestHandleFileBatchUpload(t *testing.T) {
 		_, err = tw.Write(body.buff[:])
 		require.NoError(t, err)
 
-		node.OnceGetUser()
 		node.Volume.EXPECT().UploadFile(A, A).DoAndReturn(
 			func(_ context.Context, req *sdk.UploadFileReq) (*sdk.InodeInfo, uint64, error) {
 				err := req.Callback()
 				return &sdk.InodeInfo{Inode: node.GenInode()}, uint64(100), err
 			}).Times(3)
 		require.NoError(t, doRequest(buf, &res))
-		require.Equal(t, 1, len(res.Uploaded))
+		require.Equal(t, 1, len(res.Success))
 		require.Equal(t, 2, len(res.Errors))
 		require.Equal(t, sdk.ErrMismatchChecksum.Status, res.Errors[1].Status, res.Errors[1].Message)
 		buf.Reset()
@@ -314,7 +332,6 @@ func TestHandleFileBatchUpload(t *testing.T) {
 		_, err = tw.Write(body.buff[:])
 		require.NoError(t, err)
 
-		node.OnceGetUser()
 		node.Volume.EXPECT().UploadFile(A, A).DoAndReturn(
 			func(_ context.Context, req *sdk.UploadFileReq) (*sdk.InodeInfo, uint64, error) {
 				_, err := io.CopyN(io.Discard, req.Body, int64(len(body.buff)))
@@ -324,9 +341,46 @@ func TestHandleFileBatchUpload(t *testing.T) {
 			}).Times(2)
 		require.NoError(t, doRequest(buf, &res))
 		require.Equal(t, 0, len(res.Errors))
-		require.Equal(t, 2, len(res.Uploaded))
-		require.Equal(t, "/file", res.Uploaded[0].Name)
-		require.Equal(t, chinese, res.Uploaded[1].Properties["key"])
+		require.Equal(t, 2, len(res.Success))
+		require.Equal(t, "/file", res.Success[0].Path)
+		require.Equal(t, chinese, res.Success[1].Properties["key"])
+		buf.Reset()
+	}
+	headerEncoding = gzipEncoding
+	{
+		tw := tar.NewWriter(buf)
+		require.NoError(t, tw.WriteHeader(hdr))
+		_, err := tw.Write(body.buff[:])
+		require.NoError(t, err)
+		require.NoError(t, tw.WriteHeader(hdr))
+		_, err = tw.Write(body.buff[:])
+		require.NoError(t, err)
+		require.Equal(t, sdk.ErrBadRequest.Status, doRequest(buf, &res).StatusCode())
+		buf.Reset()
+	}
+	{
+		gw := gzip.NewWriter(buf)
+		tw := tar.NewWriter(gw)
+		require.NoError(t, tw.WriteHeader(hdr))
+		_, err := tw.Write(body.buff[:])
+		require.NoError(t, err)
+		require.NoError(t, tw.WriteHeader(hdr))
+		_, err = tw.Write(body.buff[:])
+		require.NoError(t, err)
+		tw.Close()
+		gw.Close()
+
+		node.Volume.EXPECT().UploadFile(A, A).DoAndReturn(
+			func(_ context.Context, req *sdk.UploadFileReq) (*sdk.InodeInfo, uint64, error) {
+				_, err := io.CopyN(io.Discard, req.Body, int64(len(body.buff)))
+				require.NoError(t, err)
+				err = req.Callback()
+				return &sdk.InodeInfo{Inode: node.GenInode()}, uint64(100), err
+			}).Times(2)
+		require.NoError(t, doRequest(buf, &res))
+		require.Equal(t, 0, len(res.Errors))
+		require.Equal(t, 2, len(res.Success))
+		require.Equal(t, "/file", res.Success[0].Path)
 		buf.Reset()
 	}
 }
@@ -370,7 +424,7 @@ func TestHandleFileUploadPublic(t *testing.T) {
 		buff, _ := io.ReadAll(resp.Body)
 		var file FileInfo
 		require.NoError(t, json.Unmarshal(buff, &file))
-		require.Equal(t, "publicfile", file.Name)
+		require.Equal(t, "/publicfile", file.Path)
 		require.Equal(t, "Public-", file.Properties["public"])
 		require.Equal(t, 32, len(file.Properties[internalMetaMD5]))
 	}
@@ -407,9 +461,7 @@ func TestHandleFileVerify(t *testing.T) {
 		require.Equal(t, 400, doRequest("", "", "../a").StatusCode())
 	}
 	{
-		node.TestGetUser(t, func() rpc.HTTPError {
-			return doRequest("", "")
-		}, testUserID)
+		node.TestGetUser(t, func() rpc.HTTPError { return doRequest("", "") }, testUserID)
 		require.Equal(t, 400, doRequest("", "", "").StatusCode())
 	}
 	{
@@ -744,12 +796,15 @@ func TestHandleFileBatchDownload(t *testing.T) {
 	server, client := newTestServer(d)
 	defer server.Close()
 
+	headerEncoding := ""
 	doRequest := func(body []byte) *http.Response {
 		url := genURL(server.URL, "/v1/files/contents")
 		req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 		req.Header.Add(HeaderUserID, testUserID.ID)
+		req.Header.Add(HeaderAcceptEncoding, headerEncoding)
 		resp, err := client.Do(Ctx, req)
 		require.NoError(t, err)
+		require.Equal(t, headerEncoding, resp.Header.Get(HeaderContentEncoding))
 		return resp
 	}
 
@@ -757,28 +812,28 @@ func TestHandleFileBatchDownload(t *testing.T) {
 		resp := doRequest([]byte{'}'})
 		resp.Body.Close()
 		require.Equal(t, 400, resp.StatusCode)
-		buff, _ := json.Marshal([]string{"/a", "?"})
+		buff, _ := json.Marshal(ArgsBatchPath{Paths: []FilePath{"/a", "?"}})
 		resp = doRequest(buff)
 		resp.Body.Close()
 		require.Equal(t, 400, resp.StatusCode)
 	}
 	{
 		node.TestGetUser(t, func() rpc.HTTPError {
-			resp := doRequest([]byte{'[', ']'})
+			resp := doRequest([]byte{'{', '}'})
 			defer resp.Body.Close()
 			return resp2Error(resp)
 		}, testUserID)
 	}
-	body, _ := json.Marshal([]string{"/a", "/b", "/c"})
+	body, _ := json.Marshal(ArgsBatchPath{Paths: []FilePath{"/a", "/b", "/c"}})
 	{
-		node.OnceGetUser()
+		node.GetUserN(4)
 		node.LookupDirN(3)
 		resp := doRequest(body)
 		resp.Body.Close()
 		require.Equal(t, 200, resp.StatusCode)
 	}
+	node.GetUserAny()
 	{
-		node.OnceGetUser()
 		node.LookupN(3)
 		node.Volume.EXPECT().GetInode(A, A).Return(nil, e1).Times(3)
 		resp := doRequest(body)
@@ -798,7 +853,6 @@ func TestHandleFileBatchDownload(t *testing.T) {
 	}
 	{
 		size := 1024
-		node.OnceGetUser()
 		node.LookupN(3)
 		node.OnceGetInode()
 		node.OnceGetInode()
@@ -835,7 +889,6 @@ func TestHandleFileBatchDownload(t *testing.T) {
 	}
 	{
 		const n = 100
-		node.OnceGetUser()
 		node.LookupN(n)
 		node.Volume.EXPECT().GetInode(A, A).DoAndReturn(
 			func(_ context.Context, ino uint64) (*proto.InodeInfo, error) {
@@ -845,9 +898,9 @@ func TestHandleFileBatchDownload(t *testing.T) {
 				}, nil
 			}).Times(n)
 
-		var files []string
+		var files ArgsBatchPath
 		for range [n]struct{}{} {
-			files = append(files, "/a")
+			files.Paths = append(files.Paths, "/a")
 		}
 		reqBody, _ := json.Marshal(files)
 		resp := doRequest(reqBody)
@@ -860,6 +913,37 @@ func TestHandleFileBatchDownload(t *testing.T) {
 			require.Equal(t, int64(0), hdr.Size)
 			require.Equal(t, 0, len(hdr.PAXRecords))
 		}
+	}
+	headerEncoding = gzipEncoding
+	{
+		const n = 100
+		node.LookupN(n)
+		node.Volume.EXPECT().GetInode(A, A).DoAndReturn(
+			func(_ context.Context, ino uint64) (*proto.InodeInfo, error) {
+				return &proto.InodeInfo{
+					Size:  0,
+					Inode: ino,
+				}, nil
+			}).Times(n)
+
+		var files ArgsBatchPath
+		for range [n]struct{}{} {
+			files.Paths = append(files.Paths, "/a")
+		}
+		reqBody, _ := json.Marshal(files)
+		resp := doRequest(reqBody)
+		defer resp.Body.Close()
+
+		gr, err := gzip.NewReader(resp.Body)
+		require.NoError(t, err)
+		tr := tar.NewReader(gr)
+		for range [n]struct{}{} {
+			hdr, err := tr.Next()
+			require.NoError(t, err)
+			require.Equal(t, int64(0), hdr.Size)
+			require.Equal(t, 0, len(hdr.PAXRecords))
+		}
+		require.NoError(t, gr.Close())
 	}
 }
 
@@ -934,50 +1018,41 @@ func TestHandleFileRename(t *testing.T) {
 		require.Equal(t, sdk.ErrForbidden.Status, doRequest("src", "/u1/"+publicFolder+"/a", "dst", "/u2/"+publicFolder+"/b").StatusCode())
 	}
 	{
-		node.TestGetUser(t, func() rpc.HTTPError {
-			return doRequest("src", "/dir/a", "dst", "/dir/b")
-		}, testUserID)
+		node.TestGetUser(t, func() rpc.HTTPError { return doRequest("src", "/dir/a", "dst", "/dir/b") }, testUserID)
 		node.OnceGetUser()
 		require.Equal(t, 400, doRequest("src", "/dir/a", "dst", "/").StatusCode())
 		node.OnceGetUser()
 		node.Volume.EXPECT().Lookup(A, A, A).Return(nil, e1)
 		require.Equal(t, e1.Status, doRequest("src", "/dir/a", "dst", "/dir/b").StatusCode())
 	}
+	node.GetUserAny()
 	{
-		node.OnceGetUser()
 		node.OnceLookup(true)
 		node.Volume.EXPECT().Lookup(A, A, A).Return(nil, e2)
 		require.Equal(t, e2.Status, doRequest("src", "/dir/a", "dst", "/dir/b").StatusCode())
 	}
 	{
-		node.OnceGetUser()
-		node.OnceLookup(true)
-		node.OnceLookup(true)
-		node.OnceLookup(true)
+		node.LookupDirN(3)
 		require.Equal(t, sdk.ErrConflict.Status, doRequest("src", "/dir/a/", "dst", "/dir/b/").StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		node.OnceLookup(true)
 		node.OnceLookup(true)
 		node.OnceLookup(false)
 		require.Equal(t, sdk.ErrConflict.Status, doRequest("src", "/dir/a/", "dst", "/dir/b/").StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		node.OnceLookup(true)
 		node.OnceLookup(true)
 		node.Volume.EXPECT().Lookup(A, A, A).Return(nil, e1)
 		require.Equal(t, e1.Status, doRequest("src", "/dir/a/", "dst", "/dir/b/").StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		node.Volume.EXPECT().Lookup(A, A, A).Return(&sdk.DirInfo{Inode: 11111}, nil).Times(2)
 		node.Volume.EXPECT().Lookup(A, A, A).Return(nil, sdk.ErrNotFound)
 		require.Equal(t, sdk.ErrForbidden.Status, doRequest("src", "/dir/a", "dst", "/dir/a").StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		node.OnceLookup(true)
 		node.OnceLookup(true)
 		node.Volume.EXPECT().Lookup(A, A, A).Return(nil, sdk.ErrNotFound)
@@ -993,7 +1068,6 @@ func TestHandleFileRename(t *testing.T) {
 		{lookup: 1, src: "/a", dst: "/dir/b"},
 		{lookup: 0, src: "/a", dst: "/b"},
 	} {
-		node.OnceGetUser()
 		for i := 0; i < cs.lookup; i++ {
 			node.OnceLookup(true)
 		}
@@ -1025,48 +1099,41 @@ func TestHandleFileCopy(t *testing.T) {
 		require.Equal(t, 400, doRequest("src", "/a", "dst", "/").StatusCode())
 	}
 	{
-		node.TestGetUser(t, func() rpc.HTTPError {
-			return doRequest("src", "/dir/a", "dst", "/dir/b")
-		}, testUserID)
+		node.TestGetUser(t, func() rpc.HTTPError { return doRequest("src", "/dir/a", "dst", "/dir/b") }, testUserID)
 		node.OnceGetUser()
 		node.Volume.EXPECT().Lookup(A, A, A).Return(nil, e1)
 		require.Equal(t, e1.Status, doRequest("src", "/dir/a", "dst", "/dir/b").StatusCode())
 		require.Equal(t, sdk.ErrForbidden.Status, doRequest("src", "/dir/"+publicFolder+"/a", "dst", "/dir/b").StatusCode())
 		require.Equal(t, sdk.ErrForbidden.Status, doRequest("src", "/u1/"+publicFolder+"/a", "dst", "/u2/"+publicFolder+"/b").StatusCode())
 	}
+	node.GetUserAny()
 	{
-		node.OnceGetUser()
 		node.OnceLookup(true)
 		node.OnceLookup(true)
 		require.Equal(t, sdk.ErrNotFile.Status, doRequest("src", "/dir/a", "dst", "/dir/b").StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		node.LookupN(2)
 		node.Volume.EXPECT().Lookup(A, A, A).Return(nil, e1)
 		require.Equal(t, e1.Status, doRequest("src", "/dir/a", "dst", "/dir/b").StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		node.LookupN(2)
 		node.OnceLookup(true)
 		require.Equal(t, sdk.ErrNotFile.Status, doRequest("src", "/dir/a", "dst", "/b").StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		node.LookupN(3)
 		node.Volume.EXPECT().GetInode(A, A).Return(nil, e2)
 		require.Equal(t, e2.Status, doRequest("src", "/dir/a", "dst", "/b").StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		node.LookupN(3)
 		node.OnceGetInode()
 		node.Volume.EXPECT().GetXAttrMap(A, A).Return(nil, e1)
 		require.Equal(t, e1.Status, doRequest("src", "/dir/a", "dst", "/b", "meta", "1").StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		node.LookupN(3)
 		node.OnceGetInode()
 		node.Volume.EXPECT().GetXAttrMap(A, A).Return(map[string]string{
@@ -1076,7 +1143,6 @@ func TestHandleFileCopy(t *testing.T) {
 		require.Equal(t, e4.Status, doRequest("src", "/dir/a", "dst", "/b").StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		node.LookupN(3)
 		node.OnceGetInode()
 		node.Volume.EXPECT().GetXAttrMap(A, A).Return(map[string]string{
@@ -1090,7 +1156,6 @@ func TestHandleFileCopy(t *testing.T) {
 		require.NoError(t, doRequest("src", "/dir/a", "dst", "/b"))
 	}
 	{
-		node.OnceGetUser()
 		node.LookupN(3)
 		node.OnceGetInode()
 		node.Volume.EXPECT().GetXAttrMap(A, A).Return(map[string]string{
@@ -1100,7 +1165,6 @@ func TestHandleFileCopy(t *testing.T) {
 		require.Equal(t, e2.Status, doRequest("src", "/dir/a", "dst", "/b").StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		node.LookupN(2)
 		node.OnceLookup(true)
 		node.Volume.EXPECT().Lookup(A, A, A).Return(&sdk.DirInfo{Inode: 11111}, nil)

@@ -140,6 +140,22 @@ func (node *mockNode) OnceGetUser(uids ...UserID) {
 	node.Cluster.EXPECT().GetVol(A).Return(node.Volume)
 }
 
+func (node *mockNode) GetUserN(n int, uids ...UserID) {
+	node.AddUserRoute(uids...)
+	node.ClusterMgr.EXPECT().GetCluster(A).Return(node.Cluster).Times(n)
+	node.Cluster.EXPECT().GetVol(A).Return(node.Volume).Times(n)
+}
+
+func (node *mockNode) GetUserN2(uids ...UserID) {
+	node.GetUserN(2, uids...)
+}
+
+func (node *mockNode) GetUserAny(uids ...UserID) {
+	node.AddUserRoute(uids...)
+	node.ClusterMgr.EXPECT().GetCluster(A).Return(node.Cluster).AnyTimes()
+	node.Cluster.EXPECT().GetVol(A).Return(node.Volume).AnyTimes()
+}
+
 func (node *mockNode) TestGetUser(tb testing.TB, request func() rpc.HTTPError, uids ...UserID) {
 	node.AddUserRoute(uids...)
 	node.ClusterMgr.EXPECT().GetCluster(A).Return(nil)
@@ -194,9 +210,9 @@ func (node *mockNode) OnceGetInode() {
 		})
 }
 
-func (node *mockNode) ListDir(n, nFile int) {
-	node.Volume.EXPECT().Readdir(A, A, A, A).DoAndReturn(
-		func(context.Context, uint64, string, uint32) ([]sdk.DirInfo, error) {
+func (node *mockNode) listDirSnapshot(n, nFile int, snapshot bool) {
+	node.Volume.EXPECT().ReadDirAll(A, A, A).DoAndReturn(
+		func(context.Context, uint64, string) ([]sdk.DirInfo, error) {
 			dirs := make([]sdk.DirInfo, n)
 			for i := range dirs {
 				dirs[i].Inode = node.GenInode()
@@ -208,15 +224,14 @@ func (node *mockNode) ListDir(n, nFile int) {
 			}
 			return dirs, nil
 		})
-	node.Volume.EXPECT().BatchGetInodes(A, A).DoAndReturn(
-		func(_ context.Context, inos []uint64) ([]*proto.InodeInfo, error) {
-			r := make([]*proto.InodeInfo, len(inos))
-			for i := range r {
-				r[i] = &proto.InodeInfo{Inode: inos[i]}
-			}
-			return r, nil
-		})
-	node.Volume.EXPECT().GetXAttrMap(A, A).Return(nil, nil).Times(n)
+}
+
+func (node *mockNode) ListDir(n, nFile int) {
+	node.listDirSnapshot(n, nFile, true)
+}
+
+func (node *mockNode) ListDirNoSnapshot(n, nFile int) {
+	node.listDirSnapshot(n, nFile, false)
 }
 
 func resp2Data(resp *http.Response, data interface{}) rpc.HTTPError {
@@ -414,10 +429,12 @@ func TestGetUserRouterAndVolume(t *testing.T) {
 	d := node.DriveNode
 	testUserID1 := UserID{ID: "test1"}
 
+	const uid = "test1"
+
 	node.AnyLookup()
 	node.Volume.EXPECT().GetXAttr(A, A, A).DoAndReturn(func(context.Context, uint64, string) (string, error) {
 		ur := UserRoute{
-			Uid:         "test1",
+			Uid:         uid,
 			ClusterType: 1,
 			ClusterID:   "cluster01",
 			VolumeID:    "volume01",
@@ -434,13 +451,12 @@ func TestGetUserRouterAndVolume(t *testing.T) {
 	_, _, err := d.getUserRouterAndVolume(Ctx, testUserID1)
 	require.ErrorIs(t, err, sdk.ErrNoCluster)
 
-	node.ClusterMgr.EXPECT().GetCluster(A).Return(node.Cluster)
+	node.ClusterMgr.EXPECT().GetCluster(A).Return(node.Cluster).AnyTimes()
 	node.Cluster.EXPECT().GetVol(A).Return(nil)
 	_, _, err = d.getUserRouterAndVolume(Ctx, testUserID1)
 	require.ErrorIs(t, err, sdk.ErrNoVolume)
 
-	node.ClusterMgr.EXPECT().GetCluster(A).Return(node.Cluster)
-	node.Cluster.EXPECT().GetVol(A).Return(node.Volume)
+	node.Cluster.EXPECT().GetVol(A).Return(node.Volume).AnyTimes()
 	ur, vol, err := d.getUserRouterAndVolume(Ctx, testUserID1)
 	require.NoError(t, err)
 	require.Equal(t, ur.RootFileID, Inode(10))
@@ -484,7 +500,7 @@ func TestCreateDir(t *testing.T) {
 
 	node.OnceLookup(false)
 	_, _, err = d.createDir(Ctx, node.Volume, 1, "/a/b", false)
-	require.ErrorIs(t, err, sdk.ErrConflict)
+	require.ErrorIs(t, err, sdk.ErrNotDir)
 
 	node.Volume.EXPECT().Lookup(A, A, A).Return(nil, sdk.ErrNotFound).Times(2)
 	node.Volume.EXPECT().Mkdir(A, A, A).Return(nil, uint64(0), sdk.ErrExist)
@@ -495,7 +511,7 @@ func TestCreateDir(t *testing.T) {
 	node.Volume.EXPECT().Mkdir(A, A, A).Return(nil, uint64(0), sdk.ErrExist)
 	node.OnceLookup(false)
 	_, _, err = d.createDir(Ctx, node.Volume, 1, "/a", true)
-	require.ErrorIs(t, err, sdk.ErrConflict)
+	require.ErrorIs(t, err, sdk.ErrNotDir)
 
 	node.Volume.EXPECT().Lookup(A, A, A).Return(nil, sdk.ErrNotFound)
 	node.Volume.EXPECT().Mkdir(A, A, A).Return(nil, uint64(0), sdk.ErrExist)

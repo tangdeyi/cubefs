@@ -15,12 +15,13 @@
 package drive
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"strconv"
 	"testing"
@@ -36,62 +37,66 @@ import (
 )
 
 func TestFilterBuilder(t *testing.T) {
-	var (
-		builders []filterBuilder
-		err      error
-	)
-
-	_, err = makeFilterBuilders("name=")
+	_, err := makeFilterBuilders([][]string{{"name="}})
 	require.NotNil(t, err)
 
-	_, err = makeFilterBuilders("name=12345")
+	_, err = makeFilterBuilders([][]string{{"name=12345"}})
 	require.NotNil(t, err)
 
-	builders, err = makeFilterBuilders("name = 12345")
+	builders, err := makeFilterBuilders([][]string{{"name = 12345"}})
 	require.Nil(t, err)
 	require.Equal(t, 1, len(builders))
-	ok := builders[0].match("12345")
-	require.True(t, ok)
+	require.True(t, builders[0][0].match("12345"))
+	require.False(t, builders[0][0].match("123"))
+	require.False(t, builders[0][0].match("123456"))
 
-	ok = builders[0].match("123")
-	require.False(t, ok)
-	ok = builders[0].match("123456")
-	require.False(t, ok)
-
-	_, err = makeFilterBuilders("name = 12345;type = ")
+	_, err = makeFilterBuilders([][]string{{"name = 12345", "type = "}})
 	require.NotNil(t, err)
-	_, err = makeFilterBuilders("name = 12345;type = fil")
+	_, err = makeFilterBuilders([][]string{{"name = 12345", "type = fil"}})
 	require.NotNil(t, err)
-	_, err = makeFilterBuilders("name = 12345;type = *\\.doc")
+	_, err = makeFilterBuilders([][]string{{"name = 12345", "type = *\\.doc"}})
 	require.NotNil(t, err)
 
-	builders, err = makeFilterBuilders("name = 12345;type = file")
+	builders, err = makeFilterBuilders([][]string{{"name = 12345", "type = file"}})
 	require.NoError(t, err)
-	require.Equal(t, 2, len(builders))
-	require.True(t, builders[0].match("12345"))
-	require.True(t, builders[1].match("file"))
+	require.Equal(t, 2, len(builders[0]))
+	require.True(t, builders[0][0].match("12345"))
+	require.True(t, builders[0][1].match("file"))
 
-	builders, err = makeFilterBuilders("name != 12345;type = file")
+	builders, err = makeFilterBuilders([][]string{{"name != 12345", "type = file"}})
 	require.NoError(t, err)
-	require.Equal(t, 2, len(builders))
-	require.False(t, builders[0].match("12345"))
-	require.True(t, builders[1].match("file"))
+	require.Equal(t, 2, len(builders[0]))
+	require.False(t, builders[0][0].match("12345"))
+	require.True(t, builders[0][1].match("file"))
 
-	builders, err = makeFilterBuilders("name contains (.*)\\.doc$;type = file")
+	builders, err = makeFilterBuilders([][]string{{"name contains (.*)\\.doc$", "type = file"}})
 	require.NoError(t, err)
-	require.Equal(t, 2, len(builders))
-	require.True(t, builders[0].match("12.doc"))
-	require.True(t, builders[0].match("12345.doc"))
-	require.False(t, builders[0].match("doc"))
-	require.False(t, builders[0].match("adoc"))
-	require.False(t, builders[0].match("345.doc12"))
-	require.True(t, builders[1].match("file"))
+	require.Equal(t, 2, len(builders[0]))
+	require.True(t, builders[0][0].match("12.doc"))
+	require.True(t, builders[0][0].match("12345.doc"))
+	require.False(t, builders[0][0].match("doc"))
+	require.False(t, builders[0][0].match("adoc"))
+	require.False(t, builders[0][0].match("345.doc12"))
+	require.True(t, builders[0][1].match("file"))
 
-	builders, err = makeFilterBuilders("name contains (.*)\\.doc$;type = file;propertyKey = 12345")
+	builders, err = makeFilterBuilders([][]string{{"name contains (.*)\\.doc$", "type = file", "propertyKey = 12345"}})
 	require.NoError(t, err)
-	require.Equal(t, 3, len(builders))
-	require.True(t, builders[2].match("12345"))
-	require.False(t, builders[2].match("1234"))
+	require.Equal(t, 3, len(builders[0]))
+	require.True(t, builders[0][2].match("12345"))
+	require.False(t, builders[0][2].match("1234"))
+
+	builders, err = makeFilterBuilders([][]string{{"propertyKey contains _1"}, {"propertyValue contains _1"}})
+	require.NoError(t, err)
+	require.False(t, builders.match(&FileInfo{Properties: map[string]string{"key_": "val_"}}))
+	require.True(t, builders.match(&FileInfo{Properties: map[string]string{"key_1": "val_"}}))
+	require.True(t, builders.match(&FileInfo{Properties: map[string]string{"key_1": "val_1"}}))
+	require.True(t, builders.match(&FileInfo{Properties: map[string]string{"key_": "val_1"}}))
+
+	builders, err = makeFilterBuilders([][]string{{"propertyKey = key_1", "propertyValue != val_1"}})
+	require.NoError(t, err)
+	require.False(t, builders.match(&FileInfo{Properties: map[string]string{"key_": "val_", "keyx": "val_1"}}))
+	require.False(t, builders.match(&FileInfo{Properties: map[string]string{"key_1": "val_", "key_x": "val_1"}}))
+	require.True(t, builders.match(&FileInfo{Properties: map[string]string{"key_1": "val_x"}}))
 }
 
 func TestHandleListDir(t *testing.T) {
@@ -113,7 +118,7 @@ func TestHandleListDir(t *testing.T) {
 	client := ts.Client()
 	{
 		tgt := fmt.Sprintf("%s/v1/files", ts.URL)
-		req, err := http.NewRequest(http.MethodGet, tgt, nil)
+		req, err := http.NewRequest(http.MethodPost, tgt, nil)
 		require.NoError(t, err)
 		res, err := client.Do(req)
 		require.NoError(t, err)
@@ -122,8 +127,9 @@ func TestHandleListDir(t *testing.T) {
 	}
 
 	{
-		tgt := fmt.Sprintf("%s/v1/files?path=%s&limit=10", ts.URL, url.QueryEscape("/test"))
-		req, err := http.NewRequest(http.MethodGet, tgt, nil)
+		tgt := fmt.Sprintf("%s/v1/files", ts.URL)
+		body, _ := json.Marshal(ArgsList{Path: "/test", Limit: 10})
+		req, err := http.NewRequest(http.MethodPost, tgt, bytes.NewReader(body))
 		require.Nil(t, err)
 		res, err := client.Do(req)
 		require.Nil(t, err)
@@ -134,8 +140,9 @@ func TestHandleListDir(t *testing.T) {
 	{
 		// getRootInoAndVolume error
 		mockVol.EXPECT().Lookup(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil, fmt.Errorf("not found"))
-		tgt := fmt.Sprintf("%s/v1/files?path=%s&limit=10", ts.URL, url.QueryEscape("/test"))
-		req, err := http.NewRequest(http.MethodGet, tgt, nil)
+		tgt := fmt.Sprintf("%s/v1/files", ts.URL)
+		body, _ := json.Marshal(ArgsList{Path: "/test", Limit: 10})
+		req, err := http.NewRequest(http.MethodPost, tgt, bytes.NewReader(body))
 		require.Nil(t, err)
 		req.Header.Set(HeaderUserID, "test")
 		res, err := client.Do(req)
@@ -167,8 +174,9 @@ func TestHandleListDir(t *testing.T) {
 				}
 				return nil, sdk.ErrNotFound
 			})
-		tgt := fmt.Sprintf("%s/v1/files?path=%s&limit=10", ts.URL, url.QueryEscape("/test"))
-		req, err := http.NewRequest(http.MethodGet, tgt, nil)
+		tgt := fmt.Sprintf("%s/v1/files", ts.URL)
+		body, _ := json.Marshal(ArgsList{Path: "/test", Limit: 10})
+		req, err := http.NewRequest(http.MethodPost, tgt, bytes.NewReader(body))
 		require.Nil(t, err)
 		req.Header.Set(HeaderUserID, "test")
 		res, err := client.Do(req)
@@ -232,8 +240,9 @@ func TestHandleListDir(t *testing.T) {
 				return infos, nil
 			})
 		mockVol.EXPECT().GetXAttrMap(gomock.Any(), gomock.Any()).Return(nil, nil).Times(2)
-		tgt := fmt.Sprintf("%s/v1/files?path=%s&limit=10", ts.URL, url.QueryEscape("/test"))
-		req, err := http.NewRequest(http.MethodGet, tgt, nil)
+		tgt := fmt.Sprintf("%s/v1/files", ts.URL)
+		body, _ := json.Marshal(ArgsList{Path: "/test", Limit: 10})
+		req, err := http.NewRequest(http.MethodPost, tgt, bytes.NewReader(body))
 		require.Nil(t, err)
 		req.Header.Set(HeaderUserID, "test")
 		res, err := client.Do(req)
@@ -250,9 +259,10 @@ func TestHandleListAll(t *testing.T) {
 	server, client := newTestServer(d)
 	defer server.Close()
 
-	doRequest := func(path string, marker string, limit int) (*ListAllResult, rpc.HTTPError) {
-		url := genURL(server.URL, "/v1/files/recursive", "path", path, "marker", marker, "limit", fmt.Sprintf("%d", limit))
-		req, _ := http.NewRequest(http.MethodGet, url, nil)
+	doRequest := func(path string, marker string, limit int, filter [][]string) (*ListAllResult, rpc.HTTPError) {
+		url := genURL(server.URL, "/v1/files/recursive")
+		body, _ := json.Marshal(ArgsList{Path: FilePath(path), Marker: marker, Limit: limit, Filter: filter})
+		req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 		req.Header.Add(HeaderRequestID, "user_request_id")
 		req.Header.Add(HeaderUserID, testUserID.ID)
 		resp, err := client.Do(Ctx, req)
@@ -262,25 +272,113 @@ func TestHandleListAll(t *testing.T) {
 		}
 		defer resp.Body.Close()
 		result := &ListAllResult{}
-		err1 := resp2Data(resp, &result)
-		return result, err1
+		return result, resp2Data(resp, &result)
 	}
 
 	{
 		node.OnceGetUser(testUserID)
 		node.Volume.EXPECT().Lookup(A, A, A).Return(nil, sdk.ErrNotFound)
-		_, err := doRequest("/test", "", 0)
+		_, err := doRequest("/test", "", 0, nil)
 		require.Equal(t, 404, err.StatusCode())
 	}
-
 	{
-		node.OnceGetUser()
-		node.Volume.EXPECT().Lookup(A, A, A).Return(&sdk.DirInfo{
-			Inode: 100,
-			Type:  uint32(fs.ModeAppend),
-		}, nil)
-		_, err := doRequest("/test", "", 0)
+		_, err := doRequest("test", "/root/marker", 0, nil)
+		require.Equal(t, sdk.ErrBadRequest.StatusCode(), err.StatusCode())
+	}
+	{
+		_, err := doRequest("/test", "/root/marker", 0, nil)
+		require.Equal(t, sdk.ErrBadRequest.StatusCode(), err.StatusCode())
+	}
+	{
+		_, err := doRequest("/test", "", 0, [][]string{{"not a filter"}})
+		require.Equal(t, sdk.ErrBadRequest.StatusCode(), err.StatusCode())
+	}
+	{
+		_, err := doRequest("/test", "", 0, [][]string{{}})
+		require.Equal(t, sdk.ErrBadRequest.StatusCode(), err.StatusCode())
+	}
+
+	node.GetUserAny()
+	{
+		node.OnceLookup(false)
+		_, err := doRequest("/test", "", 0, nil)
 		require.Equal(t, sdk.ErrNotDir.StatusCode(), err.StatusCode())
+	}
+	{
+		node.Volume.EXPECT().Lookup(A, A, A).Return(nil, e1)
+		_, err := doRequest("/", "snapshot", 0, nil)
+		require.Equal(t, e1.StatusCode(), err.StatusCode())
+	}
+	{
+		node.OnceLookup(false)
+		node.Volume.EXPECT().ReadDirAll(A, A, A).Return(nil, e2)
+		_, err := doRequest("/", "snapshot", 1, nil)
+		require.Equal(t, e2.StatusCode(), err.StatusCode())
+	}
+	{
+		node.OnceLookup(false)
+		node.Volume.EXPECT().ReadDirAll(A, A, A).Return(nil, nil)
+		node.Volume.EXPECT().GetInode(A, A).Return(nil, e3)
+		_, err := doRequest("/", "snapshot", 1, nil)
+		require.Equal(t, e3.StatusCode(), err.StatusCode())
+	}
+	{
+		node.OnceLookup(false)
+		node.Volume.EXPECT().ReadDirAll(A, A, A).Return(nil, nil)
+		node.OnceGetInode()
+		node.Volume.EXPECT().GetXAttrMap(A, A).Return(nil, e4)
+		_, err := doRequest("/", "snapshot", 1, nil)
+		require.Equal(t, e4.StatusCode(), err.StatusCode())
+	}
+	{
+		node.OnceLookup(false)
+		node.Volume.EXPECT().ReadDirAll(A, A, A).Return(nil, nil)
+		node.OnceGetInode()
+		node.Volume.EXPECT().GetXAttrMap(A, A).Return(nil, nil)
+		result, err := doRequest("/", "snapshot", 1, nil)
+		require.NoError(t, err)
+		require.Equal(t, "", result.NextMarker)
+		require.Equal(t, 1, len(result.Files))
+		require.Equal(t, "/snapshot", result.Files[0].Path)
+		require.Equal(t, typeFile, result.Files[0].Type)
+	}
+	{
+		node.Volume.EXPECT().ReadDirAll(A, A, A).Return([]sdk.DirInfo{
+			{Name: "name1", Inode: node.GenInode(), Type: 0, FileId: node.GenInode()},
+			{Name: "name2", Inode: node.GenInode(), Type: 0, FileId: node.GenInode()},
+			{Name: "name3", Inode: node.GenInode(), Type: 0, FileId: node.GenInode()},
+		}, nil)
+		node.OnceGetInode()
+		node.OnceGetInode()
+		node.OnceGetInode()
+		node.Volume.EXPECT().GetXAttrMap(A, A).Return(nil, nil).Times(3)
+
+		result, err := doRequest("/", "", 2, nil)
+		require.NoError(t, err)
+		require.Equal(t, "name3", result.NextMarker)
+		require.Equal(t, 2, len(result.Files))
+		require.Equal(t, typeFile, result.Files[0].Type)
+	}
+	{
+		node.Volume.EXPECT().ReadDirAll(A, A, A).Return([]sdk.DirInfo{
+			{Name: "name1", Inode: node.GenInode(), Type: 0, FileId: node.GenInode()},
+			{Name: "name2", Inode: node.GenInode(), Type: 0, FileId: node.GenInode()},
+			{Name: "name3", Inode: node.GenInode(), Type: 0, FileId: node.GenInode()},
+		}, nil)
+		node.OnceGetInode()
+		node.OnceGetInode()
+		node.Volume.EXPECT().GetXAttrMap(A, A).Return(nil, nil).Times(2)
+		result, err := doRequest("/", "", 3, [][]string{
+			{"name = name1", "type = file"},
+			{"name != name2", "type = file"},
+		})
+		require.NoError(t, err)
+		require.Equal(t, "", result.NextMarker)
+		require.Equal(t, 2, len(result.Files))
+		require.Contains(t, []string{"/name1", "/name3"}, result.Files[0].Path)
+		require.Contains(t, []string{"/name1", "/name3"}, result.Files[1].Path)
+		require.Equal(t, typeFile, result.Files[0].Type)
+		require.Equal(t, typeFile, result.Files[1].Type)
 	}
 
 	{
@@ -292,7 +390,6 @@ func TestHandleListAll(t *testing.T) {
 				inoMap[inode+uint64(j)] = typeFile
 			}
 		}
-		node.OnceGetUser()
 		node.Volume.EXPECT().Lookup(A, A, A).DoAndReturn(func(ctx context.Context, ino uint64, name string) (*sdk.DirInfo, error) {
 			inode := uint64(100)
 			if name != "test" {
@@ -338,17 +435,15 @@ func TestHandleListAll(t *testing.T) {
 			}, nil
 		}).AnyTimes()
 		node.Volume.EXPECT().GetXAttrMap(A, A).Return(nil, nil).AnyTimes()
-		result, err := doRequest("/test", "", 0)
+		result, err := doRequest("/test", "", 0, nil)
 		require.Nil(t, err)
 		require.Equal(t, 32, len(result.Files))
 
-		node.OnceGetUser()
-		result, err = doRequest("/test", "200/209", 0)
+		result, err = doRequest("/test", "200/209", 0, nil)
 		require.Nil(t, err)
 		require.Equal(t, 13, len(result.Files))
 
-		node.OnceGetUser()
-		result, err = doRequest("/test", "400", 0)
+		result, err = doRequest("/test", "400", 0, nil)
 		require.Nil(t, err)
 		require.Equal(t, 0, len(result.Files))
 	}

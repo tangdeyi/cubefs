@@ -1,11 +1,15 @@
 package drive
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"testing"
 
+	"github.com/cubefs/cubefs/apinode/sdk"
 	"github.com/cubefs/cubefs/blobstore/common/rpc"
+	"github.com/cubefs/cubefs/proto"
 	"github.com/stretchr/testify/require"
 )
 
@@ -202,7 +206,69 @@ func TestHandleGetProperties(t *testing.T) {
 		node.OnceGetInode()
 		var rst GetPropertiesResult
 		require.NoError(t, doRequest("/a", &rst))
+		require.Equal(t, "/a", rst.Path)
 		require.Equal(t, typeFolder, rst.Type)
 		require.Equal(t, "v2", rst.Properties["k2"])
+	}
+}
+
+func TestHandleBatchGetProperties(t *testing.T) {
+	node := newMockNode(t)
+	d := node.DriveNode
+	server, client := newTestServer(d)
+	defer server.Close()
+
+	doRequest := func(args ArgsBatchPath, data interface{}) rpc.HTTPError {
+		url := genURL(server.URL, "/v1/files/properties")
+		body, _ := json.Marshal(args)
+		req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+		req.Header.Add(HeaderUserID, testUserID.ID)
+		resp, err := client.Do(Ctx, req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		return resp2Data(resp, data)
+	}
+
+	{
+		var args ArgsBatchPath
+		node.TestGetUser(t, func() rpc.HTTPError { return doRequest(args, nil) }, testUserID)
+		node.OnceGetUser()
+		require.NoError(t, doRequest(args, nil))
+		args.Paths = append(args.Paths, "../")
+		require.Equal(t, 400, doRequest(args, nil).StatusCode())
+
+	}
+	node.GetUserAny()
+	var result BatchUploadFileResult
+	args := ArgsBatchPath{Paths: []FilePath{"/a", "/b", "/c"}}
+	{
+		node.Volume.EXPECT().Lookup(A, A, A).Return(nil, e1).Times(3)
+		require.NoError(t, doRequest(args, &result))
+		require.Equal(t, 3, len(result.Errors))
+	}
+	node.Volume.EXPECT().Lookup(A, A, A).Return(&sdk.DirInfo{}, nil).AnyTimes()
+	{
+		node.Volume.EXPECT().GetXAttrMap(A, A).Return(nil, e2).Times(3)
+		require.NoError(t, doRequest(args, &result))
+		require.Equal(t, 3, len(result.Errors))
+	}
+	node.Volume.EXPECT().GetXAttrMap(A, A).Return(nil, nil).AnyTimes()
+	{
+		node.Volume.EXPECT().GetInode(A, A).Return(nil, e3).Times(3)
+		require.NoError(t, doRequest(args, &result))
+		require.Equal(t, 3, len(result.Errors))
+	}
+	{
+		node.Volume.EXPECT().GetInode(A, A).Return(nil, e3).Times(2)
+		node.Volume.EXPECT().GetInode(A, A).Return(&proto.InodeInfo{}, nil)
+		require.NoError(t, doRequest(args, &result))
+		require.Equal(t, 1, len(result.Success))
+		require.Equal(t, 2, len(result.Errors))
+	}
+	node.Volume.EXPECT().GetInode(A, A).Return(&proto.InodeInfo{}, nil).AnyTimes()
+	{
+		require.NoError(t, doRequest(args, &result))
+		require.Equal(t, 3, len(result.Success))
+		require.Equal(t, 0, len(result.Errors))
 	}
 }

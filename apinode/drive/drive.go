@@ -52,12 +52,16 @@ const (
 	HeaderMD5       = "x-cfa-content-md5"
 	ChecksumPrefix  = "x-cfa-content-"
 
-	HeaderCipherMaterial = "x-cfa-cipher-material"
+	HeaderCipherMaterial  = "x-cfa-cipher-material"
+	HeaderAcceptEncoding  = "x-cfa-accept-encoding"
+	HeaderContentEncoding = "x-cfa-content-encoding"
+	gzipEncoding          = "gzip"
 
 	UserPropertyPrefix = "x-cfa-meta-"
 
-	typeFile   = "file"
-	typeFolder = "folder"
+	typeFile     = "file"
+	typeFolder   = "folder"
+	typeSnapshot = "snapshot"
 
 	publicFolder = "public"
 
@@ -66,6 +70,7 @@ const (
 	internalMetaUploadID = internalMetaPrefix + "uploadid"
 
 	PAXFileID         = "x-cfa-file-id"
+	PAXForce          = "x-cfa-force"
 	PAXCrc32          = HeaderCrc32
 	PAXMD5            = HeaderMD5
 	PAXDownloadStatus = "x-cfa-download-status"
@@ -172,7 +177,7 @@ func (u *UserID) String() string {
 type FileInfo struct {
 	ID         uint64            `json:"fileId"`
 	Ino        uint64            `json:"-"`
-	Name       string            `json:"name"`
+	Path       string            `json:"path"`
 	Type       string            `json:"type"`
 	Size       int64             `json:"size"`
 	Ctime      int64             `json:"ctime"`
@@ -185,20 +190,27 @@ func (fi *FileInfo) IsDir() bool {
 	return fi.Type == typeFolder
 }
 
+func fileInfoType(isDir bool) string {
+	if isDir {
+		return typeFolder
+	}
+	return typeFile
+}
+
 // origin map changed.
 func removeInternalMeta(properties map[string]string) map[string]string {
 	delete(properties, internalMetaUploadID)
 	return properties
 }
 
-func inode2file(ino *sdk.InodeInfo, fileID uint64, name string, properties map[string]string) *FileInfo {
+func inode2file(ino *sdk.InodeInfo, fileID uint64, path string, properties map[string]string) *FileInfo {
 	typ := typeFile
 	if proto.IsDir(ino.Mode) {
 		typ = typeFolder
 	}
 	return &FileInfo{
 		ID:         fileID,
-		Name:       name,
+		Path:       path,
 		Type:       typ,
 		Size:       int64(ino.Size),
 		Ctime:      ino.CreateTime.Unix(),
@@ -212,13 +224,6 @@ const (
 	maxTaskPoolSize     = 8
 	defaultLimiterBurst = 2000
 )
-
-type ArgsListDir struct {
-	Path   FilePath `json:"path"`
-	Marker string   `json:"marker,omitempty"`
-	Limit  int      `json:"limit"`
-	Filter string   `json:"filter,omitempty"`
-}
 
 type ArgsProperties struct {
 	Path FilePath `json:"path"`
@@ -286,10 +291,16 @@ func (d *DriveNode) Start(cfg *config.Config) error {
 	if cluster == nil {
 		return fmt.Errorf("not get cluster clusterID: %s", d.clusterID)
 	}
-	d.vol = cluster.GetVol(d.volumeName)
-	if d.vol == nil {
+	vol := cluster.GetVol(d.volumeName)
+	if vol == nil {
 		return fmt.Errorf("not get volume volumeName: %s", d.volumeName)
 	}
+	// vol, err := vol.GetDirSnapshot(ctx, 1)
+	// if err != nil {
+	// 	log.Errorf("get snapshot volume %s error: %v", d.volumeName, err)
+	// 	return err
+	// }
+	d.vol = vol
 
 	if err := d.initClusterConfig(); err != nil {
 		return err
@@ -370,7 +381,11 @@ func (d *DriveNode) getFileDecryptor(ctx context.Context, key []byte, r io.Reade
 func (d *DriveNode) getUserRouterAndVolume(ctx context.Context, uid UserID) (*UserRoute, sdk.IVolume, error) {
 	span := trace.SpanFromContextSafe(ctx)
 	st := time.Now()
-	defer func() { span.AppendTrackLog("civ", st, nil) }()
+	defer func() {
+		if hasTraceLog(ctx) {
+			span.AppendTrackLog("civ", st, nil)
+		}
+	}()
 	ur, err := d.GetUserRouteInfo(ctx, uid)
 	if err != nil {
 		return nil, nil, err
@@ -385,6 +400,10 @@ func (d *DriveNode) getUserRouterAndVolume(ctx context.Context, uid UserID) (*Us
 	if volume == nil {
 		return nil, nil, sdk.ErrNoVolume
 	}
+	// volume, err = volume.GetDirSnapshot(ctx, uint64(ur.RootFileID))
+	// if err != nil {
+	// 	return nil, nil, err
+	// }
 	return ur, volume, nil
 }
 
@@ -410,7 +429,11 @@ func (d *DriveNode) lookupDir(ctx context.Context, vol sdk.IVolume, parentIno In
 	return info, nil
 }
 
-func (d *DriveNode) lookupFileID(ctx context.Context, vol sdk.IVolume, parentIno Inode, path string, fileID uint64) (err error) {
+// update fileID if force.
+func (d *DriveNode) lookupFileID(ctx context.Context, vol sdk.IVolume,
+	parentIno Inode, path string, pfileID *uint64, force bool,
+) (err error) {
+	fileID := *pfileID
 	dirInfo, err := d.lookup(ctx, vol, parentIno, path)
 	if err == sdk.ErrNotFound {
 		if fileID != 0 {
@@ -419,6 +442,10 @@ func (d *DriveNode) lookupFileID(ctx context.Context, vol sdk.IVolume, parentIno
 		return nil
 	} else if err != nil {
 		return err
+	}
+	if force && fileID == 0 {
+		*pfileID = dirInfo.FileId
+		return nil
 	}
 	if dirInfo.FileId != fileID {
 		return sdk.Conflicted(dirInfo.FileId)
@@ -491,7 +518,7 @@ func (d *DriveNode) createDir(ctx context.Context, vol sdk.IVolume, parentIno In
 					return
 				}
 				if !dirInfo.IsDir() {
-					err = sdk.ErrConflict
+					err = sdk.ErrNotDir
 					return
 				}
 				parentIno = Inode(dirInfo.Inode)
@@ -502,7 +529,7 @@ func (d *DriveNode) createDir(ctx context.Context, vol sdk.IVolume, parentIno In
 			ino = parentIno
 		} else {
 			if !dirInfo.IsDir() {
-				err = sdk.ErrConflict
+				err = sdk.ErrNotDir
 				return
 			}
 			parentIno = Inode(dirInfo.Inode)

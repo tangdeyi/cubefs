@@ -21,6 +21,7 @@ import (
 	"hash/crc32"
 	"io"
 	"net/http"
+	"sync/atomic"
 	"testing"
 
 	"github.com/cubefs/cubefs/apinode/sdk"
@@ -204,4 +205,32 @@ func TestHelperChecksums(t *testing.T) {
 			require.NoError(t, err)
 		}
 	}
+}
+
+func TestHelperPipeReader(t *testing.T) {
+	pwr := newPipeReader()
+
+	var all, count uint32
+	done := make(chan struct{})
+	go func() {
+		p := make([]byte, 16)
+		for {
+			n, err := pwr.Read(p)
+			if err == io.EOF {
+				close(done)
+				return
+			}
+			atomic.AddUint32(&count, 1)
+			atomic.AddUint32(&all, uint32(n))
+		}
+	}()
+
+	b := make([]byte, 31)
+	for range [10]struct{}{} {
+		pwr.Write(b)
+	}
+	pwr.Close()
+	<-done
+	require.Equal(t, uint32(20), atomic.LoadUint32(&count))
+	require.Equal(t, uint32(31*10), atomic.LoadUint32(&all))
 }

@@ -29,6 +29,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/cubefs/cubefs/apinode/sdk"
 )
@@ -292,4 +293,39 @@ func withNoTraceLog(ctx context.Context) context.Context {
 
 func hasTraceLog(ctx context.Context) bool {
 	return ctx.Value(noTraceLog) == nil
+}
+
+type pipeWriteReader struct {
+	once sync.Once
+	ch   chan []byte
+	last []byte
+}
+
+func (wr *pipeWriteReader) Write(w []byte) (n int, err error) {
+	wr.ch <- w
+	return len(w), nil
+}
+
+func (wr *pipeWriteReader) Read(p []byte) (n int, err error) {
+	if len(wr.last) > 0 {
+		n = copy(p, wr.last)
+		wr.last = wr.last[n:]
+		return
+	}
+	b, ok := <-wr.ch
+	if !ok {
+		err = io.EOF
+		return
+	}
+	n = copy(p, b)
+	wr.last = b[n:]
+	return
+}
+
+func (wr *pipeWriteReader) Close() {
+	wr.once.Do(func() { close(wr.ch) })
+}
+
+func newPipeReader() *pipeWriteReader {
+	return &pipeWriteReader{ch: make(chan []byte, 1)}
 }

@@ -17,9 +17,11 @@ package drive
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -51,7 +53,20 @@ func TestHandleMultipartUploads(t *testing.T) {
 		resp, err := client.Do(Ctx, req)
 		require.NoError(t, err)
 		defer resp.Body.Close()
-		return resp2Data(resp, r)
+		synchrony := false
+		for idx := range queries {
+			if queries[idx] == "synchrony" && queries[idx+1] == "1" {
+				synchrony = true
+			}
+		}
+		if synchrony || resp.StatusCode != 200 {
+			return resp2Data(resp, r)
+		}
+		compResp := &completeResponse{}
+		if err = json.NewDecoder(resp.Body).Decode(compResp); err == nil && compResp.Status != 200 {
+			return rpc.NewError(compResp.Status, compResp.Code, errors.New(compResp.Error))
+		}
+		return nil
 	}
 
 	{
@@ -71,27 +86,24 @@ func TestHandleMultipartUploads(t *testing.T) {
 		var up RespMPuploads
 		require.Equal(t, e1.Status, doRequest(newMockBody(0), &up, "path", "/mpfile").StatusCode())
 	}
+	node.GetUserAny()
 	{
-		node.OnceGetUser()
 		node.Volume.EXPECT().Lookup(A, A, A).Return(nil, sdk.ErrNotFound)
 		node.Volume.EXPECT().InitMultiPart(A, A, A).Return(uploadID, nil)
 		var up RespMPuploads
-		require.NoError(t, doRequest(newMockBody(0), &up, "path", "/mpfile"))
+		require.NoError(t, doRequest(newMockBody(0), &up, "path", "/mpfile", "synchrony", "1"))
 		require.Equal(t, uploadID, up.UploadID)
 	}
 	{
-		node.OnceGetUser()
 		node.Volume.EXPECT().Lookup(A, A, A).Return(nil, sdk.ErrNotFound)
 		require.Equal(t, 400, doRequest(newMockBody(64), nil, "path", "/mpfile", "uploadId", uploadID).StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		node.Volume.EXPECT().Lookup(A, A, A).Return(nil, sdk.ErrNotFound)
 		require.Equal(t, sdk.ErrConflict.Status, doRequest(newMockBody(0), nil,
 			"path", "/mpfile", "uploadId", uploadID, "fileId", "123").StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		node.Volume.EXPECT().Lookup(A, A, A).Return(&sdk.DirInfo{Inode: 11111}, nil)
 		node.Volume.EXPECT().GetXAttrMap(A, A).Return(nil, e1)
 		node.Volume.EXPECT().GetInode(A, A).Return(nil, nil)
@@ -99,7 +111,6 @@ func TestHandleMultipartUploads(t *testing.T) {
 			"path", "/mpfile", "uploadId", uploadID, "fileId", "123").StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		node.Volume.EXPECT().Lookup(A, A, A).Return(&sdk.DirInfo{Inode: 11111}, nil)
 		node.Volume.EXPECT().GetXAttrMap(A, A).Return(make(map[string]string), nil)
 		node.Volume.EXPECT().GetInode(A, A).Return(nil, nil)
@@ -107,27 +118,23 @@ func TestHandleMultipartUploads(t *testing.T) {
 			"path", "/mpfile", "uploadId", uploadID, "fileId", "123").StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		node.Volume.EXPECT().Lookup(A, A, A).Return(&sdk.DirInfo{Inode: 11111}, nil)
 		node.Volume.EXPECT().GetXAttrMap(A, A).Return(map[string]string{internalMetaUploadID: uploadID}, nil)
 		node.Volume.EXPECT().GetInode(A, A).Return(&proto.InodeInfo{Size: 1024}, nil)
-		require.NoError(t, doRequest(newMockBody(0), nil, "path", "/mpfile", "uploadId", uploadID, "fileId", "123"))
+		require.NoError(t, doRequest(newMockBody(0), nil, "path", "/mpfile", "uploadId", uploadID, "fileId", "123", "synchrony", "1"))
 	}
 	{
-		node.OnceGetUser()
 		body := &mockBody{buff: []byte("[]")}
 		node.Volume.EXPECT().Lookup(A, A, A).Return(nil, sdk.ErrConflict)
 		require.Equal(t, sdk.ErrConflict.Status, doRequest(body, nil, "path", "/mpfile", "uploadId", uploadID, "fileId", "123").StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		body := &mockBody{buff: []byte("[]")}
 		node.Volume.EXPECT().Lookup(A, A, A).Return(nil, sdk.ErrNotFound)
 		node.Volume.EXPECT().ListMultiPart(A, A, A, A, A).Return(nil, uint64(0), false, e2)
 		require.Equal(t, e2.Status, doRequest(body, nil, "path", "/mpfile", "uploadId", uploadID).StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		var listp []*sdk.Part
 		for idx := range [10]struct{}{} {
 			listp = append(listp, &sdk.Part{ID: uint16(idx + 1), Size: crypto.BlockSize, MD5: fmt.Sprint(idx)})
@@ -140,7 +147,6 @@ func TestHandleMultipartUploads(t *testing.T) {
 		require.Equal(t, 400, doRequest(body, nil, "path", "/mpfile", "uploadId", uploadID).StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		var listp []*sdk.Part
 		for idx := range [10]struct{}{} {
 			listp = append(listp, &sdk.Part{ID: uint16(idx + 1), Size: crypto.BlockSize, MD5: fmt.Sprint(idx)})
@@ -153,7 +159,6 @@ func TestHandleMultipartUploads(t *testing.T) {
 		require.Equal(t, 400, doRequest(body, nil, "path", "/mpfile", "uploadId", uploadID).StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		var parts []MPPart
 		var listp []*sdk.Part
 		for idx := range [10]struct{}{} {
@@ -168,7 +173,6 @@ func TestHandleMultipartUploads(t *testing.T) {
 		require.Equal(t, 400, doRequest(body, nil, "path", "/mpfile", "uploadId", uploadID).StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		var parts []MPPart
 		var listp []*sdk.Part
 		for idx := range [10]struct{}{} {
@@ -183,7 +187,6 @@ func TestHandleMultipartUploads(t *testing.T) {
 		require.Equal(t, 400, doRequest(body, nil, "path", "/mpfile", "uploadId", uploadID).StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		body := &mockBody{buff: []byte("[]")}
 		node.Volume.EXPECT().Lookup(A, A, A).Return(nil, sdk.ErrNotFound)
 		node.Volume.EXPECT().ListMultiPart(A, A, A, A, A).Return(nil, uint64(100), false, nil)
@@ -193,7 +196,6 @@ func TestHandleMultipartUploads(t *testing.T) {
 		require.Equal(t, e3.Status, doRequest(body, nil, "path", "/mpfile", "uploadId", uploadID).StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		body := &mockBody{buff: []byte("[]")}
 		node.Volume.EXPECT().Lookup(A, A, A).Return(nil, sdk.ErrNotFound)
 		node.Volume.EXPECT().ListMultiPart(A, A, A, A, A).Return(nil, uint64(100), false, nil)
@@ -202,7 +204,6 @@ func TestHandleMultipartUploads(t *testing.T) {
 		require.Equal(t, e4.Status, doRequest(body, nil, "path", "/mpfile", "uploadId", uploadID).StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		var listp []*sdk.Part
 		for idx := range [10]struct{}{} {
 			listp = append(listp, &sdk.Part{ID: uint16(idx + 1), Size: crypto.BlockSize, MD5: fmt.Sprint(idx)})
@@ -213,10 +214,9 @@ func TestHandleMultipartUploads(t *testing.T) {
 		node.Volume.EXPECT().ListMultiPart(A, A, A, A, A).Return(nil, uint64(0), false, nil)
 		node.Volume.EXPECT().CompleteMultiPart(A, A).Return(&sdk.InodeInfo{Inode: node.GenInode()}, uint64(0), nil)
 		node.Volume.EXPECT().GetXAttrMap(A, A).Return(nil, nil)
-		require.NoError(t, doRequest(body, nil, "path", "/mpfile", "uploadId", uploadID))
+		require.NoError(t, doRequest(body, nil, "path", "/mpfile", "synchrony", "1", "uploadId", uploadID))
 	}
 	{
-		node.OnceGetUser()
 		var parts []MPPart
 		var listp []*sdk.Part
 		for idx := range [1]struct{}{} {
@@ -231,7 +231,6 @@ func TestHandleMultipartUploads(t *testing.T) {
 		require.Equal(t, 500, doRequest(body, nil, "path", "/mpfile", "uploadId", uploadID).StatusCode())
 	}
 	{
-		node.OnceGetUser()
 		var parts []MPPart
 		var listp []*sdk.Part
 		for idx := range [10]struct{}{} {
@@ -253,7 +252,28 @@ func TestHandleMultipartUploads(t *testing.T) {
 		require.NoError(t, doRequest(body, nil, "path", "/mpfile", "uploadId", uploadID))
 	}
 	{
-		node.OnceGetUser()
+		var parts []MPPart
+		var listp []*sdk.Part
+		for idx := range [10]struct{}{} {
+			parts = append(parts, MPPart{PartNumber: uint16(idx + 1), Size: int(crypto.BlockSize), Etag: fmt.Sprint(idx)})
+			listp = append(listp, &sdk.Part{ID: uint16(idx + 1), Inode: uint64(idx + 1111), Size: crypto.BlockSize, MD5: fmt.Sprint(idx)})
+		}
+		buff, _ := json.Marshal(parts)
+		body := &mockBody{buff: buff}
+		node.Volume.EXPECT().Lookup(A, A, A).Return(nil, sdk.ErrNotFound)
+		node.Volume.EXPECT().ListMultiPart(A, A, A, A, A).Return(listp, uint64(0), false, nil)
+		node.Volume.EXPECT().ReadFile(A, A, A, A).Return(int(crypto.BlockSize), nil).Times(10)
+		node.Volume.EXPECT().CompleteMultiPart(A, A).DoAndReturn(
+			func(_ context.Context, req *sdk.CompleteMultipartReq) (*sdk.InodeInfo, uint64, error) {
+				require.NotEmpty(t, req.Extend[internalMetaMD5])
+				require.NotEmpty(t, req.Extend[internalMetaUploadID])
+				time.Sleep(200 * time.Millisecond)
+				return &sdk.InodeInfo{Inode: node.GenInode()}, uint64(0), nil
+			})
+		node.Volume.EXPECT().GetXAttrMap(A, A).Return(nil, nil)
+		require.NoError(t, doRequest(body, nil, "path", "/mpfile", "interval", "100", "uploadId", uploadID))
+	}
+	{
 		var parts []MPPart
 		var listp []*sdk.Part
 		for idx := range [10]struct{}{} {
@@ -267,6 +287,24 @@ func TestHandleMultipartUploads(t *testing.T) {
 		node.Volume.EXPECT().ReadFile(A, A, A, A).Return(int(crypto.BlockSize), nil).Times(10)
 		contentMD5 = "not-md5"
 		require.Equal(t, sdk.ErrMismatchChecksum.Status, doRequest(body, nil, "path", "/mpfile", "uploadId", uploadID).StatusCode())
+	}
+	{
+		var parts []MPPart
+		var listp []*sdk.Part
+		for idx := range [10]struct{}{} {
+			parts = append(parts, MPPart{PartNumber: uint16(idx + 1), Size: int(crypto.BlockSize), Etag: fmt.Sprint(idx)})
+			listp = append(listp, &sdk.Part{ID: uint16(idx + 1), Inode: uint64(idx + 1111), Size: crypto.BlockSize, MD5: fmt.Sprint(idx)})
+		}
+		buff, _ := json.Marshal(parts)
+		body := &mockBody{buff: buff}
+		node.Volume.EXPECT().Lookup(A, A, A).Return(&sdk.DirInfo{Inode: 11111, FileId: 22222}, nil)
+		node.Volume.EXPECT().GetXAttrMap(A, A).Return(make(map[string]string), nil)
+		node.Volume.EXPECT().GetInode(A, A).Return(&proto.InodeInfo{Size: 1024}, nil)
+		node.Volume.EXPECT().ListMultiPart(A, A, A, A, A).Return(listp, uint64(0), false, nil)
+		node.Volume.EXPECT().ReadFile(A, A, A, A).Return(int(crypto.BlockSize), nil).Times(10)
+		contentMD5 = "not-md5"
+		require.Equal(t, sdk.ErrMismatchChecksum.Status,
+			doRequest(body, nil, "path", "/mpfile", "force", "1", "synchrony", "1", "uploadId", uploadID).StatusCode())
 	}
 }
 

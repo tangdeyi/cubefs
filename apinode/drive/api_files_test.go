@@ -163,14 +163,8 @@ func TestHandleFilesDelete(t *testing.T) {
 	{
 		node.OnceGetUser()
 		node.LookupDirN(4)
-		node.Volume.EXPECT().Readdir(A, A, A, A).Return(nil, e4)
+		node.Volume.EXPECT().ReadDirAll(A, A, A).Return(nil, e4)
 		require.Equal(t, e4.Status, doRecuDel().StatusCode())
-	}
-	{
-		node.OnceGetUser()
-		node.LookupDirN(4)
-		node.ListDir(10000, 0)
-		require.Equal(t, sdk.ErrInternalServerError.Status, doRecuDel().StatusCode())
 	}
 	{
 		node.OnceGetUser()
@@ -181,14 +175,14 @@ func TestHandleFilesDelete(t *testing.T) {
 	{
 		node.OnceGetUser()
 		node.LookupDirN(4)
-		node.ListDir(10, 0)
+		node.ListDirNoSnapshot(10, 0)
 		for range [10]struct{}{} {
 			node.OnceLookup(true)
-			node.ListDir(10, 0)
+			node.ListDirNoSnapshot(10, 0)
 		}
 		for range [100]struct{}{} {
 			node.OnceLookup(true)
-			node.ListDir(0, 0)
+			node.ListDirNoSnapshot(0, 0)
 		}
 		node.Volume.EXPECT().Delete(A, A, A, A).Return(nil).Times(111)
 		require.NoError(t, doRecuDel())
@@ -196,10 +190,10 @@ func TestHandleFilesDelete(t *testing.T) {
 	{
 		node.OnceGetUser()
 		node.LookupDirN(4)
-		node.ListDir(100, 0)
+		node.ListDirNoSnapshot(100, 0)
 		for range [100]struct{}{} {
 			node.OnceLookup(true)
-			node.ListDir(0, 0)
+			node.ListDirNoSnapshot(0, 0)
 		}
 		node.Volume.EXPECT().Delete(A, A, A, A).Return(e1).MinTimes(1)
 		require.Equal(t, e1.Status, doRecuDel().StatusCode())
@@ -212,7 +206,7 @@ func TestHandleBatchDelete(t *testing.T) {
 	server, client := newTestServer(d)
 	defer server.Close()
 
-	doRequest := func(args ArgsBatchDelete) (*BatchDeleteResult, rpc.HTTPError) {
+	doRequest := func(args ArgsBatchPath) (*BatchDeleteResult, rpc.HTTPError) {
 		url := genURL(server.URL, "/v1/files/batch")
 		data, _ := json.Marshal(args)
 		req, _ := http.NewRequest(http.MethodDelete, url, bytes.NewReader(data))
@@ -230,12 +224,10 @@ func TestHandleBatchDelete(t *testing.T) {
 	}
 
 	{
-		node.OnceGetUser(testUserID)
+		node.GetUserN(1, testUserID)
 		node.Volume.EXPECT().Lookup(A, A, A).Return(&sdk.DirInfo{}, nil).Times(2)
 		node.Volume.EXPECT().Delete(A, A, A, A).Return(nil)
-		args := ArgsBatchDelete{
-			Paths: []FilePath{"/test/1234"},
-		}
+		args := ArgsBatchPath{Paths: []FilePath{"/test/1234"}}
 
 		paths := []string{}
 		for _, path := range args.Paths {
@@ -244,5 +236,77 @@ func TestHandleBatchDelete(t *testing.T) {
 		res, err := doRequest(args)
 		require.NoError(t, err)
 		require.True(t, reflect.DeepEqual(res.Deleted, paths))
+	}
+}
+
+func TestHandleFilesHeadEmpty(t *testing.T) {
+	node := newMockNode(t)
+	d := node.DriveNode
+	server, client := newTestServer(d)
+	defer server.Close()
+
+	doRequest := func(queries ...string) rpc.HTTPError {
+		url := genURL(server.URL, "/v1/files/empty", queries...)
+		req, _ := http.NewRequest(http.MethodHead, url, nil)
+		req.Header.Add(HeaderUserID, testUserID.ID)
+		resp, err := client.Do(Ctx, req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		return resp2Error(resp)
+	}
+
+	{
+		require.Equal(t, 400, doRequest("src", "/a").StatusCode())
+		require.Equal(t, 400, doRequest("path", "a/b/../../..").StatusCode())
+	}
+	{
+		node.TestGetUser(t, func() rpc.HTTPError { return doRequest("path", "/dir/a") }, testUserID)
+		node.OnceGetUser()
+		node.Volume.EXPECT().Lookup(A, A, A).Return(nil, e1)
+		require.Equal(t, e1.Status, doRequest("path", "/dir/a").StatusCode())
+	}
+	{
+		node.OnceGetUser()
+		node.Volume.EXPECT().Lookup(A, A, A).Return(nil, e2)
+		require.Equal(t, e2.Status, doRequest("path", "/a").StatusCode())
+	}
+	{
+		node.OnceGetUser()
+		node.OnceLookup(true)
+		node.Volume.EXPECT().Lookup(A, A, A).Return(nil, e3)
+		require.Equal(t, e3.Status, doRequest("path", "/dir/a").StatusCode())
+	}
+	node.GetUserAny()
+	{
+		node.OnceLookup(false)
+		require.Equal(t, sdk.ErrNotDir.Status, doRequest("path", "/a").StatusCode())
+	}
+	{
+		node.OnceLookup(true)
+		node.Volume.EXPECT().Readdir(A, A, A, A).Return(nil, e4)
+		require.Equal(t, e4.Status, doRequest("path", "/a").StatusCode())
+	}
+	{
+		node.OnceLookup(true)
+		node.Volume.EXPECT().Readdir(A, A, A, A).Return([]sdk.DirInfo{{}}, nil)
+		require.Equal(t, sdk.ErrNotEmpty.Status, doRequest("path", "/a").StatusCode())
+	}
+	{
+		node.OnceLookup(true)
+		node.Volume.EXPECT().Readdir(A, A, A, A).Return(nil, nil)
+		require.NoError(t, doRequest("path", "/a"))
+	}
+	{
+		node.LookupDirN(4)
+		node.ListDirNoSnapshot(10, 0)
+		for range [10]struct{}{} {
+			node.OnceLookup(true)
+			node.ListDirNoSnapshot(10, 0)
+		}
+		for range [100]struct{}{} {
+			node.OnceLookup(true)
+			node.ListDirNoSnapshot(0, 0)
+		}
+		require.NoError(t, doRequest("recursive", "1", "path", "/dir/a/"))
 	}
 }

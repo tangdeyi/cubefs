@@ -44,10 +44,11 @@ type ListDirResult struct {
 	Files      []FileInfo `json:"files"`
 }
 
-type ArgsListAll struct {
-	Path   FilePath `json:"path"`
-	Limit  int      `json:"limit,omitempty"`
-	Marker string   `json:"marker,omitempty"`
+type ArgsList struct {
+	Path   FilePath   `json:"path"`
+	Marker string     `json:"marker,omitempty"`
+	Limit  int        `json:"limit"`
+	Filter [][]string `json:"filter,omitempty"` // first [] means OR, second [] means AND
 }
 
 type ListAllResult struct {
@@ -62,6 +63,8 @@ type filterBuilder struct {
 	value     string
 }
 
+type unionFilter [][]filterBuilder
+
 const (
 	opContains = "contains"
 	opEqual    = "="
@@ -72,7 +75,7 @@ type FileInfoSlice []FileInfo
 
 func (s FileInfoSlice) Len() int           { return len(s) }
 func (s FileInfoSlice) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
-func (s FileInfoSlice) Less(i, j int) bool { return s[i].Name < s[j].Name }
+func (s FileInfoSlice) Less(i, j int) bool { return s[i].Path < s[j].Path }
 
 var filterKeyMap = map[string][]string{
 	"name":          {opContains, opEqual, opNotEqual},
@@ -91,8 +94,8 @@ func validFilterBuilder(builder *filterBuilder) error {
 		err.Message = fmt.Sprintf("invalid filter[%s]", builder)
 		return err
 	}
-	if builder.key == "type" && builder.value != typeFile && builder.value != typeFolder {
-		err.Message = fmt.Sprintf("invalid filter[%s], type value is neither file nor folder", builder)
+	if builder.key == "type" && builder.value != typeFile && builder.value != typeFolder && builder.value != typeSnapshot {
+		err.Message = fmt.Sprintf("invalid filter[%s], type value is not file folder or snapshot", builder)
 		return err
 	}
 	for _, op := range ops {
@@ -112,26 +115,33 @@ func validFilterBuilder(builder *filterBuilder) error {
 	return err
 }
 
-func makeFilterBuilders(value string) ([]filterBuilder, error) {
-	filters := strings.Split(value, ";")
-	if len(filters) == 0 {
-		return nil, nil
-	}
-	var builders []filterBuilder
-	for _, s := range filters {
-		f := strings.Split(s, " ")
-		if len(f) != 3 {
+func makeFilterBuilders(filters [][]string) (unionFilter, error) {
+	var builders unionFilter
+	for _, ands := range filters {
+		if len(ands) == 0 {
 			return nil, &sdk.Error{
 				Status:  sdk.ErrInvalidPath.Status,
 				Code:    sdk.ErrInvalidPath.Code,
-				Message: fmt.Sprintf("invalid filter=%s", value),
+				Message: "empty filters",
 			}
 		}
-		builder := filterBuilder{key: f[0], operation: f[1], value: f[2]}
-		if err := validFilterBuilder(&builder); err != nil {
-			return nil, err
+		andBuilders := make([]filterBuilder, 0, len(ands))
+		for _, and := range ands {
+			f := strings.SplitN(and, " ", 3)
+			if len(f) != 3 {
+				return nil, &sdk.Error{
+					Status:  sdk.ErrInvalidPath.Status,
+					Code:    sdk.ErrInvalidPath.Code,
+					Message: fmt.Sprintf("invalid filter=%s", and),
+				}
+			}
+			builder := filterBuilder{key: f[0], operation: f[1], value: f[2]}
+			if err := validFilterBuilder(&builder); err != nil {
+				return nil, err
+			}
+			andBuilders = append(andBuilders, builder)
 		}
-		builders = append(builders, builder)
+		builders = append(builders, andBuilders[:])
 	}
 	return builders, nil
 }
@@ -152,32 +162,75 @@ func (builder *filterBuilder) match(v string) bool {
 	return false
 }
 
+func (builder *filterBuilder) matchs(properties map[string]struct{}) bool {
+	switch builder.operation {
+	case opContains:
+		for v := range properties {
+			if builder.re.MatchString(v) {
+				return true
+			}
+		}
+	case opEqual:
+		for v := range properties {
+			if builder.value == v {
+				return true
+			}
+		}
+	case opNotEqual:
+		for v := range properties {
+			if builder.value == v {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
 func (builder *filterBuilder) matchFileInfo(f *FileInfo) bool {
 	switch builder.key {
 	case "name":
-		return builder.match(f.Name)
+		return builder.match(f.Path)
 	case "type":
 		return builder.match(f.Type)
 	case "propertyKey":
+		properties := make(map[string]struct{}, len(f.Properties))
 		for k := range f.Properties {
-			if builder.match(k) {
-				return true
-			}
+			properties[k] = struct{}{}
 		}
-		return false
+		return builder.matchs(properties)
 	case "propertyValue":
+		properties := make(map[string]struct{}, len(f.Properties))
 		for _, v := range f.Properties {
-			if builder.match(v) {
-				return true
+			properties[v] = struct{}{}
+		}
+		return builder.matchs(properties)
+	}
+	return false
+}
+
+// match all condition
+func (uf unionFilter) match(file *FileInfo) bool {
+	if len(uf) == 0 {
+		return true
+	}
+	for idxOr := range uf {
+		matched := true
+		for idxAnd := range uf[idxOr] {
+			if !uf[idxOr][idxAnd].matchFileInfo(file) {
+				matched = false
+				break
 			}
 		}
-		return false
+		if matched {
+			return true
+		}
 	}
 	return false
 }
 
 func (d *DriveNode) handleListDir(c *rpc.Context) {
-	args := new(ArgsListDir)
+	args := new(ArgsList)
 	ctx, span := d.ctxSpan(c)
 	if d.checkError(c, func(err error) { span.Error(err) }, c.ParseArgs(args), args.Path.Clean(false)) {
 		return
@@ -198,12 +251,12 @@ func (d *DriveNode) handleListDir(c *rpc.Context) {
 	}
 	root := ur.RootFileID
 
-	builders := []filterBuilder{}
 	if path == "/" {
 		pathIno = root
 	} else {
 		// 2. lookup the inode of dir
-		dirInodeInfo, err := d.lookup(ctx, vol, root, path)
+		var dirInodeInfo *sdk.DirInfo
+		dirInodeInfo, err = d.lookup(ctx, vol, root, path)
 		if err != nil {
 			span.Errorf("lookup path=%s error: %v", path, err)
 			d.respError(c, err)
@@ -218,14 +271,11 @@ func (d *DriveNode) handleListDir(c *rpc.Context) {
 		fileID = dirInodeInfo.FileId
 	}
 
-	if args.Filter != "" {
-		bs, err := makeFilterBuilders(args.Filter)
-		if err != nil {
-			span.Errorf("makeFilterBuilders error: %v, path=%s, filter=%s", err, path, args.Filter)
-			d.respError(c, &sdk.Error{Status: sdk.ErrBadRequest.Status, Code: sdk.ErrBadRequest.Code, Message: err.Error()})
-			return
-		}
-		builders = append(builders, bs...)
+	filter, err := makeFilterBuilders(args.Filter)
+	if err != nil {
+		span.Errorf("error: %v, path=%s, filter=%v", err, path, args.Filter)
+		d.respError(c, sdk.ErrBadRequest.Extend(err.Error()))
+		return
 	}
 
 	res := ListDirResult{
@@ -273,20 +323,13 @@ func (d *DriveNode) handleListDir(c *rpc.Context) {
 				isLast = true
 				marker = "" // clear marker
 			} else {
-				marker = fileInfo[len(fileInfo)-1].Name
+				marker = fileInfo[len(fileInfo)-1].Path
 				fileInfo = fileInfo[:len(fileInfo)-1]
 			}
 
-			if len(builders) > 0 {
+			if len(filter) > 0 {
 				for j := 0; j < len(fileInfo); j++ {
-					match := true
-					for _, builder := range builders { // match all condition
-						if !builder.matchFileInfo(&fileInfo[j]) {
-							match = false
-							break
-						}
-					}
-					if match {
+					if filter.match(&fileInfo[j]) {
 						res.Files = append(res.Files, fileInfo[j])
 					}
 				}
@@ -300,6 +343,9 @@ func (d *DriveNode) handleListDir(c *rpc.Context) {
 	res.NextMarker = marker
 	if len(res.Files) > limit {
 		res.Files = res.Files[:limit]
+	}
+	for idx := range res.Files {
+		res.Files[idx].Path = filepath.Join(path, res.Files[idx].Path)
 	}
 	d.respData(c, res)
 }
@@ -336,17 +382,17 @@ func (d *DriveNode) listDir(ctx context.Context, ino uint64, vol sdk.IVolume, ma
 	defer pool.Close()
 	wg.Add(n)
 	for i := 0; i < n; i++ {
-		typ := typeFile
-		if dirInfos[i].IsDir() {
-			typ = typeFolder
-		}
 		ino := dirInfos[i].Inode
 		fileID := dirInfos[i].FileId
 
+		typ := fileInfoType(dirInfos[i].IsDir())
+		// if vol.IsSnapshotInode(ctx, ino) {
+		// 	typ = typeSnapshot
+		// }
 		files = append(files, FileInfo{
 			ID:         dirInfos[i].FileId,
 			Ino:        ino,
-			Name:       dirInfos[i].Name,
+			Path:       dirInfos[i].Name,
 			Type:       typ,
 			Size:       int64(inoInfo[i].Size),
 			Ctime:      inoInfo[i].CreateTime.Unix(),
@@ -374,7 +420,6 @@ func (d *DriveNode) listDir(ctx context.Context, ino uint64, vol sdk.IVolume, ma
 		}
 	}
 	sort.Sort(FileInfoSlice(files))
-	//
 	return
 }
 
@@ -384,17 +429,17 @@ type stackElement struct {
 	marker string
 }
 
-func getDirList(ctx context.Context, vol sdk.IVolume, ino uint64, marker string) (*list.List, *sdk.DirInfo, error) {
-	var info *sdk.DirInfo
+func getMarkerStack(ctx context.Context, vol sdk.IVolume, ino uint64, marker string) (*list.List, *FileInfo, error) {
+	var marked *FileInfo
 	stack := list.New()
-	if marker == "" {
+	if marker == "" || marker == "." {
 		stack.PushBack(&stackElement{ino: ino})
 		return stack, nil, nil
 	}
 
 	curName := ""
 	dirs := strings.Split(marker, "/")
-	for i, dir := range dirs {
+	for idx, dir := range dirs {
 		stack.PushBack(&stackElement{ino: ino, name: curName, marker: dir})
 
 		dirInfo, err := vol.Lookup(ctx, ino, dir)
@@ -405,56 +450,73 @@ func getDirList(ctx context.Context, vol sdk.IVolume, ino uint64, marker string)
 		}
 
 		curName = filepath.Join(curName, dirInfo.Name)
-
 		ino = dirInfo.Inode
-		if i == len(dirs)-1 {
-			dirInfo.Name = curName
-			info = dirInfo
-			if dirInfo.IsDir() {
+
+		marked = &FileInfo{
+			ID:   dirInfo.FileId,
+			Ino:  dirInfo.Inode,
+			Path: curName,
+			Type: fileInfoType(dirInfo.IsDir()),
+		}
+		// if vol.IsSnapshotInode(ctx, dirInfo.Inode) {
+		// 	marked.Type = typeSnapshot
+		// 	break
+		// }
+		if dirInfo.IsDir() {
+			if idx == len(dirs)-1 { // push back if last name is dir.
 				stack.PushBack(&stackElement{ino: ino, name: curName})
 			}
-		}
-		if !dirInfo.IsDir() {
+		} else {
 			break
 		}
 	}
-	return stack, info, nil
+	return stack, marked, nil
 }
 
-func recursiveScan(ctx context.Context, vol sdk.IVolume, stack *list.List, limit int, result *ListAllResult) error {
+func recursiveScan(ctx context.Context, newVol func() (sdk.IVolume, error),
+	stack *list.List, limit int, result *ListAllResult, filter unionFilter,
+) error {
 	for stack.Len() > 0 {
 		elem := stack.Back()
 		e := elem.Value.(*stackElement)
 
+		vol, err := newVol()
+		if err != nil {
+			return err
+		}
 		dirInfos, err := vol.ReadDirAll(ctx, e.ino, e.marker)
 		if err != nil {
 			return err
 		}
-		needPop := true
 
+		needPop := true
 		for _, dirInfo := range dirInfos {
 			if dirInfo.Name <= e.marker {
 				continue
 			}
 			e.marker = dirInfo.Name
 
-			fileType := typeFile
-			if dirInfo.IsDir() {
-				fileType = typeFolder
-			}
-
 			curName := filepath.Join(e.name, dirInfo.Name)
 
-			result.Files = append(result.Files, FileInfo{
+			file := FileInfo{
 				ID:   dirInfo.FileId,
 				Ino:  dirInfo.Inode,
-				Name: curName,
-				Type: fileType,
-			})
+				Path: curName,
+				Type: fileInfoType(dirInfo.IsDir()),
+			}
+			isSnapshot := false
+			// isSnapshot := vol.IsSnapshotInode(ctx, dirInfo.Inode)
+			if isSnapshot {
+				file.Type = typeSnapshot
+			}
+
+			if filter.match(&file) {
+				result.Files = append(result.Files, file)
+			}
 			if len(result.Files) >= limit {
 				return nil
 			}
-			if fileType == typeFolder {
+			if dirInfo.IsDir() && !isSnapshot {
 				stack.PushBack(&stackElement{ino: dirInfo.Inode, name: curName})
 				needPop = false
 				break
@@ -468,7 +530,7 @@ func recursiveScan(ctx context.Context, vol sdk.IVolume, stack *list.List, limit
 }
 
 func (d *DriveNode) handleListAll(c *rpc.Context) {
-	args := new(ArgsListAll)
+	args := new(ArgsList)
 	ctx, span := d.ctxSpan(c)
 	if d.checkError(c, func(err error) { span.Error(err) }, c.ParseArgs(args), args.Path.Clean(false)) {
 		return
@@ -482,26 +544,27 @@ func (d *DriveNode) handleListAll(c *rpc.Context) {
 		limit = 10000
 	}
 	limit += 1
-
 	if len(marker) > 0 && marker[0] == '/' {
-		d.respError(c, sdk.ErrBadRequest.Extend(marker))
+		d.respError(c, sdk.ErrBadRequest.Extendf("use relative path in marker:%s", marker))
 		return
 	}
-
-	var pathIno Inode
+	filter, err := makeFilterBuilders(args.Filter)
+	if err != nil {
+		span.Warnf("filter=%v %v", args.Filter, err)
+		d.respError(c, sdk.ErrBadRequest.Extend(err.Error()))
+		return
+	}
 
 	// 1. get user route info
 	ur, vol, err := d.getUserRouterAndVolume(ctx, uid)
 	if err != nil {
-		span.Errorf("Failed to get volume: %v", err)
 		d.respError(c, err)
 		return
 	}
 	root := ur.RootFileID
 
-	if path == "/" {
-		pathIno = root
-	} else {
+	pathIno := root.Uint64()
+	if path != "/" {
 		// 2. lookup the inode of dir
 		dirInodeInfo, errx := d.lookup(ctx, vol, root, path)
 		if errx != nil {
@@ -514,31 +577,28 @@ func (d *DriveNode) handleListAll(c *rpc.Context) {
 			d.respError(c, sdk.ErrNotDir)
 			return
 		}
-		pathIno = Inode(dirInodeInfo.Inode)
+		pathIno = dirInodeInfo.Inode
 	}
 
-	stack, dirInfo, err := getDirList(ctx, vol, pathIno.Uint64(), marker)
-	if err != nil {
-		d.respError(c, err)
-		return
+	newVol := func() (sdk.IVolume, error) {
+		_, snapVol, snapErr := d.getUserRouterAndVolume(withNoTraceLog(ctx), uid)
+		return snapVol, snapErr
 	}
 
 	result := ListAllResult{Files: []FileInfo{}}
-	if dirInfo != nil {
-		fileType := typeFile
-		if dirInfo.IsDir() {
-			fileType = typeFolder
-		}
-		result.Files = append(result.Files, FileInfo{
-			ID:   dirInfo.FileId,
-			Ino:  dirInfo.Inode,
-			Name: dirInfo.Name,
-			Type: fileType,
-		})
+	volMarker, err := newVol()
+	if d.checkError(c, nil, err) {
+		return
+	}
+	stack, marked, err := getMarkerStack(ctx, volMarker, pathIno, marker)
+	if d.checkError(c, nil, err) {
+		return
+	}
+	if marked != nil && filter.match(marked) {
+		result.Files = append(result.Files, *marked)
 	}
 
-	if err = recursiveScan(ctx, vol, stack, limit, &result); err != nil {
-		d.respError(c, err)
+	if d.checkError(c, nil, recursiveScan(ctx, newVol, stack, limit, &result, filter)) {
 		return
 	}
 
@@ -555,15 +615,21 @@ func (d *DriveNode) handleListAll(c *rpc.Context) {
 			if errValue.Load() != nil {
 				return
 			}
-			inoInfo, err := vol.GetInode(ctx, ino)
+			// xattrVol, err := newVol()
+			// if err != nil {
+			// 	errValue.Store(err)
+			// 	return
+			// }
+			xattrVol := volMarker
+			inoInfo, err := xattrVol.GetInode(ctx, ino)
 			if err != nil {
-				span.Errorf("get inode error: %v, name: %s, inode: %s", err, result.Files[idx].Name, ino)
+				span.Errorf("get inode error: %v, name: %s, inode: %s", err, result.Files[idx].Path, ino)
 				errValue.Store(err)
 				return
 			}
-			properties, err := vol.GetXAttrMap(ctx, ino)
+			properties, err := xattrVol.GetXAttrMap(ctx, ino)
 			if err != nil {
-				span.Errorf("get xattr error: %v, name: %s, inode: %d", err, result.Files[idx].Name, ino)
+				span.Errorf("get xattr error: %v, name: %s, inode: %d", err, result.Files[idx].Path, ino)
 				errValue.Store(err)
 				return
 			}
@@ -584,8 +650,11 @@ func (d *DriveNode) handleListAll(c *rpc.Context) {
 		return
 	}
 	if limit <= len(result.Files) {
-		result.NextMarker = result.Files[limit-1].Name
+		result.NextMarker = result.Files[limit-1].Path
 		result.Files = result.Files[0 : limit-1]
+	}
+	for idx := range result.Files {
+		result.Files[idx].Path = filepath.Join(path, result.Files[idx].Path)
 	}
 	d.respData(c, result)
 }

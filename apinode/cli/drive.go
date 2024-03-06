@@ -67,6 +67,16 @@ func addCmdMeta(cmd *grumble.Command) {
 			return show(cli.MetaGet(c.Args.String("path")))
 		},
 	})
+	metaCommand.AddCommand(&grumble.Command{
+		Name: "batch",
+		Help: "batch get meta",
+		Args: func(a *grumble.Args) {
+			a.StringList("paths", "file paths")
+		},
+		Run: func(c *grumble.Context) error {
+			return show(cli.MetaBatch(c.Args.StringList("paths")))
+		},
+	})
 }
 
 func addCmdDir(cmd *grumble.Command) {
@@ -76,18 +86,39 @@ func addCmdDir(cmd *grumble.Command) {
 	}
 	cmd.AddCommand(dirCommand)
 
+	listFlags := func(f *grumble.Flags) {
+		f.StringL("path", "/", "path")
+		f.StringL("marker", "", "marker")
+		f.IntL("limit", 10, "limit")
+		f.StringL("filter", "", "and;and;and -- and;and -- ...")
+	}
+
+	parseFilter := func(filterStr string) (filter [][]string) {
+		for _, ands := range strings.Split(filterStr, " -- ") {
+			if len(ands) == 0 {
+				continue
+			}
+			filter = append(filter, strings.Split(ands, ";"))
+		}
+		return
+	}
+
 	dirCommand.AddCommand(&grumble.Command{
-		Name: "list",
-		Help: "list dir",
-		Flags: func(f *grumble.Flags) {
-			f.StringL("path", "/", "path")
-			f.StringL("marker", "", "marker")
-			f.StringL("limit", "10", "limit")
-			f.StringL("filter", "", "filter")
-		},
+		Name:  "list",
+		Help:  "list dir",
+		Flags: listFlags,
 		Run: func(c *grumble.Context) error {
 			f := c.Flags.String
-			return show(cli.ListDir(f("path"), f("marker"), f("limit"), f("filter")))
+			return show(cli.ListDir(f("path"), f("marker"), c.Flags.Int("limit"), parseFilter(f("filter"))))
+		},
+	})
+	dirCommand.AddCommand(&grumble.Command{
+		Name:  "all",
+		Help:  "list all",
+		Flags: listFlags,
+		Run: func(c *grumble.Context) error {
+			f := c.Flags.String
+			return show(cli.ListAll(f("path"), f("marker"), c.Flags.Int("limit"), parseFilter(f("filter"))))
 		},
 	})
 	dirCommand.AddCommand(&grumble.Command{
@@ -309,10 +340,10 @@ func addCmdFile(cmd *grumble.Command) {
 		Name: "batchdownload",
 		Help: "batch download file",
 		Args: func(a *grumble.Args) {
-			a.StringList("files", "path path path")
+			a.StringList("paths", "path path path")
 		},
 		Run: func(c *grumble.Context) error {
-			return cli.FileBatchDownload(c.Args.StringList("files"))
+			return cli.FileBatchDownload(c.Args.StringList("paths"))
 		},
 	})
 }
@@ -460,6 +491,37 @@ func addCmdMultipart(cmd *grumble.Command) {
 	})
 }
 
+func addCmdSnapshot(cmd *grumble.Command) {
+	snapCommand := &grumble.Command{
+		Name: "snapshot",
+		Help: "snapshot api",
+	}
+	cmd.AddCommand(snapCommand)
+
+	snapCommand.AddCommand(&grumble.Command{
+		Name: "create",
+		Help: "create dir snapshot",
+		Args: func(a *grumble.Args) {
+			a.String("path", "path name")
+			a.String("ver", "version")
+		},
+		Run: func(c *grumble.Context) error {
+			return cli.SnapshotCreate(c.Args.String("path"), c.Args.String("ver"))
+		},
+	})
+	snapCommand.AddCommand(&grumble.Command{
+		Name: "delete",
+		Help: "delete dir snapshot",
+		Args: func(a *grumble.Args) {
+			a.String("path", "path name")
+			a.String("ver", "version")
+		},
+		Run: func(c *grumble.Context) error {
+			return cli.SnapshotDelete(c.Args.String("path"), c.Args.String("ver"))
+		},
+	})
+}
+
 func flagsStrings(f *grumble.Flags, keys ...string) {
 	for _, k := range keys {
 		f.StringL(k, "", k)
@@ -485,4 +547,5 @@ func registerDrive(app *grumble.App) {
 	addCmdDir(driveCommand)
 	addCmdFile(driveCommand)
 	addCmdMultipart(driveCommand)
+	addCmdSnapshot(driveCommand)
 }

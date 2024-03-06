@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"path"
 	"sync"
 	"time"
@@ -52,9 +53,12 @@ type MPPart struct {
 
 // ArgsMPUploads multipart upload or complete argument.
 type ArgsMPUploads struct {
-	Path     FilePath `json:"path"`
-	UploadID string   `json:"uploadId,omitempty"`
-	FileID   uint64   `json:"fileId,omitempty"`
+	Path      FilePath `json:"path"`
+	UploadID  string   `json:"uploadId,omitempty"`
+	FileID    uint64   `json:"fileId,omitempty"`
+	Force     bool     `json:"force,omitempty"`
+	Synchrony bool     `json:"synchrony,omitempty"`
+	Interval  int64    `json:"interval,omitempty"` // for complete testing ms
 }
 
 func (d *DriveNode) handleMultipartUploads(c *rpc.Context) {
@@ -90,7 +94,7 @@ func (d *DriveNode) multipartUploads(c *rpc.Context, args *ArgsMPUploads) {
 	}
 
 	if d.checkError(c, func(err error) { span.Error("lookup error: ", err, args) },
-		d.lookupFileID(ctx, vol, root, args.Path.String(), args.FileID)) {
+		d.lookupFileID(ctx, vol, root, args.Path.String(), &args.FileID, args.Force)) {
 		return
 	}
 
@@ -290,6 +294,49 @@ func (d *DriveNode) calculatePartsMD5(c *rpc.Context, vol sdk.IVolume, parts []s
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
+type completeResult struct {
+	r interface{}
+	e error
+}
+
+type completeResponse struct {
+	Status   int       `json:"status"`
+	Error    string    `json:"error"`
+	Code     string    `json:"code,omitempty"`
+	FileInfo *FileInfo `json:"fileinfo,omitempty"`
+}
+
+func (d *DriveNode) replyKeepAliveBody(compResult completeResult) (body []byte) {
+	var err error
+	func() {
+		if err = compResult.e; err != nil {
+			return
+		}
+		body, err = json.Marshal(completeResponse{
+			Status:   http.StatusOK,
+			FileInfo: compResult.r.(*FileInfo),
+		})
+		if err != nil {
+			err = sdk.ErrInternalServerError
+			return
+		}
+	}()
+	if err == nil {
+		return
+	}
+
+	httpErr := rpc.Error2HTTPError(err)
+	body, err = json.Marshal(completeResponse{
+		Status: httpErr.StatusCode(),
+		Error:  httpErr.Error(),
+		Code:   httpErr.ErrorCode(),
+	})
+	if err != nil {
+		body = []byte(err.Error())
+	}
+	return
+}
+
 func (d *DriveNode) multipartComplete(c *rpc.Context, args *ArgsMPUploads) {
 	ctx, span := d.ctxSpan(c)
 	uid := d.userID(c, &args.Path)
@@ -317,8 +364,10 @@ func (d *DriveNode) multipartComplete(c *rpc.Context, args *ArgsMPUploads) {
 			return
 		}
 		if xattrs[internalMetaUploadID] == args.UploadID {
-			d.respData(c, inode2file(inoInfo, fileInfo.FileId, fileInfo.Name, xattrs))
+			d.respData(c, inode2file(inoInfo, fileInfo.FileId, args.Path.String(), xattrs))
 			return
+		} else if args.Force && args.FileID == 0 {
+			args.FileID = fileInfo.FileId
 		} else if fileInfo.FileId != args.FileID {
 			span.Warn("fileid mismatch", args.FileID, fileInfo.FileId)
 			d.respError(c, sdk.Conflicted(fileInfo.FileId))
@@ -326,60 +375,107 @@ func (d *DriveNode) multipartComplete(c *rpc.Context, args *ArgsMPUploads) {
 		}
 	}
 
-	compFile, err, _ := d.groupMulti.Do(args.UploadID, func() (interface{}, error) {
-		st := time.Now()
-		parts, gerr := d.checkParts(c, vol, uid, args)
-		span.AppendTrackLog("cmcl", st, nil)
-		if gerr != nil {
-			span.Warn("multipart complete check", args, gerr)
-			return nil, gerr
-		}
+	getCompleteResult := func() completeResult {
+		compFile, errRes, _ := d.groupMulti.Do(args.UploadID, func() (interface{}, error) {
+			st := time.Now()
+			parts, gerr := d.checkParts(c, vol, uid, args)
+			span.AppendTrackLog("cmcl", st, nil)
+			if gerr != nil {
+				span.Warn("multipart complete check", args, gerr)
+				return nil, gerr
+			}
 
-		st = time.Now()
-		fileMD5, gerr := d.calculatePartsMD5(c, vol, parts, ur.CipherKey)
-		span.AppendTrackLog("cmcc", st, gerr)
-		if gerr != nil {
-			span.Warn("multipart complete calculate", args, gerr)
-			return nil, gerr
-		}
-		if gerr = verifyMD5(c.Request.Header, fileMD5); gerr != nil {
-			span.Warnf("multipart comlete", gerr)
-			return nil, gerr
-		}
+			st = time.Now()
+			fileMD5, gerr := d.calculatePartsMD5(c, vol, parts, ur.CipherKey)
+			span.AppendTrackLog("cmcc", st, gerr)
+			if gerr != nil {
+				span.Warn("multipart complete calculate", args, gerr)
+				return nil, gerr
+			}
+			if gerr = verifyMD5(c.Request.Header, fileMD5); gerr != nil {
+				span.Warnf("multipart comlete", gerr)
+				return nil, gerr
+			}
 
-		cmReq := &sdk.CompleteMultipartReq{
-			FilePath:  multipartFullPath(uid, args.Path),
-			UploadId:  args.UploadID,
-			OldFileId: args.FileID,
-			Parts:     parts,
-			Extend: map[string]string{
-				internalMetaMD5:      fileMD5,
-				internalMetaUploadID: args.UploadID,
-			},
-		}
-		inode, fileID, gerr := vol.CompleteMultiPart(ctx, cmReq)
-		if gerr != nil {
-			span.Error("multipart complete", args, parts, gerr)
-			return nil, gerr
-		}
-		extend, gerr := vol.GetXAttrMap(ctx, inode.Inode)
-		if gerr != nil {
-			span.Error("multipart complete, get properties", inode.Inode, gerr)
-			return nil, gerr
-		}
+			cmReq := &sdk.CompleteMultipartReq{
+				FilePath:  multipartFullPath(uid, args.Path),
+				UploadId:  args.UploadID,
+				OldFileId: args.FileID,
+				Parts:     parts,
+				Extend: map[string]string{
+					internalMetaMD5:      fileMD5,
+					internalMetaUploadID: args.UploadID,
+				},
+			}
+			inode, fileID, gerr := vol.CompleteMultiPart(ctx, cmReq)
+			if gerr != nil {
+				span.Error("multipart complete", args, parts, gerr)
+				return nil, gerr
+			}
+			extend, gerr := vol.GetXAttrMap(ctx, inode.Inode)
+			if gerr != nil {
+				span.Error("multipart complete, get properties", inode.Inode, gerr)
+				return nil, gerr
+			}
 
-		d.out.Publish(ctx, makeOpLog(OpMultiUploadFile, d.requestID(c), uid,
-			args.Path.String(), "size", inode.Size))
-		span.Info("multipart complete", fileMD5, args, parts)
-		_, filename := args.Path.Split()
-		return inode2file(inode, fileID, filename, extend), nil
-	})
+			d.out.Publish(ctx, makeOpLog(OpMultiUploadFile, d.requestID(c), uid,
+				args.Path.String(), "size", inode.Size))
+			span.Info("multipart complete", fileMD5, args, parts)
+			return inode2file(inode, fileID, args.Path.String(), extend), nil
+		})
+		return completeResult{r: compFile, e: errRes}
+	}
+
+	if args.Synchrony {
+		compResult := getCompleteResult()
+		if err = compResult.e; err != nil {
+			d.respError(c, err)
+			return
+		}
+		d.respData(c, compResult.r.(*FileInfo))
+		return
+	}
+
+	pwr := newPipeReader()
+	resp, respMaterial, err := d.cryptor.TransEncryptor(c.Request.Header.Get(HeaderCipherMaterial), pwr)
 	if err != nil {
+		span.Warn("make encrypt transmitter", err)
 		d.respError(c, err)
 		return
 	}
 
-	d.respData(c, compFile.(*FileInfo))
+	compRusultCh := make(chan completeResult)
+	go func() {
+		compRusultCh <- getCompleteResult()
+	}()
+
+	interval := time.Duration(args.Interval) * time.Millisecond
+	if interval <= 0 {
+		interval = 10 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	c.Writer.Header().Set(rpc.HeaderContentType, rpc.MIMEJSON)
+	if respMaterial != "" {
+		c.Writer.Header().Set(HeaderCipherMaterial, respMaterial)
+	}
+	c.RespondStatus(http.StatusOK)
+	for {
+		select {
+		case <-ticker.C:
+			pwr.Write([]byte{' '})
+			io.CopyN(c.Writer, resp, 1)
+			c.Flush()
+			span.Info("tick to client:", args.UploadID)
+		case compResult := <-compRusultCh:
+			writeBytes, _ := pwr.Write(d.replyKeepAliveBody(compResult))
+			pwr.Close()
+			io.CopyN(c.Writer, resp, int64(writeBytes))
+			c.Flush()
+			return
+		}
+	}
 }
 
 // ArgsMPUpload multipart upload part argument.

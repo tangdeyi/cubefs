@@ -1,10 +1,6 @@
 package drive
 
 import (
-	"fmt"
-	"path/filepath"
-
-	"github.com/cubefs/cubefs/apinode/sdk"
 	"github.com/cubefs/cubefs/blobstore/common/rpc"
 )
 
@@ -14,54 +10,41 @@ type ArgsSnapshot struct {
 }
 
 func (d *DriveNode) handleCreateSnapshot(c *rpc.Context) {
-	args := &ArgsSnapshot{}
+	args := new(ArgsSnapshot)
 	ctx, span := d.ctxSpan(c)
 	if d.checkError(c, func(err error) { span.Error(err) }, c.ParseArgs(args), args.Path.Clean(true)) {
 		return
 	}
 
 	uid := d.userID(c, nil)
-	ur, vol, err := d.getUserRouterAndVolume(ctx, uid)
+	ur, _, err := d.getUserRouterAndVolume(ctx, uid)
 	if d.checkError(c, func(err error) { span.Warn(err) }, err, ur.CanWrite()) {
 		return
 	}
-	root := ur.RootFileID
-	path := filepath.Join(args.Path.String(), fmt.Sprintf(".cfa_snapshot_%s", args.Version))
-	_, _, err = d.createDir(ctx, vol, root, path, false)
-	if d.checkError(c, func(err error) {
-		span.Errorf("create dir %s snapshot error: %s, uid=%s", args.Path, err.Error(), uid)
-	}, err) {
-		return
-	}
-	d.out.Publish(ctx, makeOpLog(OpCreateDir, d.requestID(c), uid, path))
+	// if d.checkError(c, func(err error) {
+	// 	span.Errorf("uid=%v create snapshot %s error: %s", uid, args.Path, err.Error())
+	// }, vol.CreateDirSnapshot(ctx, args.Version, args.Path.String())) {
+	// 	return
+	// }
 	c.Respond()
 }
 
 func (d *DriveNode) handleDeleteSnapshot(c *rpc.Context) {
-	args := &ArgsSnapshot{}
+	args := new(ArgsSnapshot)
 	ctx, span := d.ctxSpan(c)
 	if d.checkError(c, func(err error) { span.Error(err) }, c.ParseArgs(args), args.Path.Clean(true)) {
 		return
 	}
 
 	uid := d.userID(c, nil)
-	ur, vol, err := d.getUserRouterAndVolume(ctx, uid)
+	ur, _, err := d.getUserRouterAndVolume(ctx, uid)
 	if d.checkError(c, func(err error) { span.Warn(err) }, err, ur.CanWrite()) {
 		return
 	}
-	root := ur.RootFileID
-	path := filepath.Join(args.Path.String(), fmt.Sprintf(".cfa_snapshot_%s", args.Version))
-
-	var info *sdk.DirInfo
-	if d.checkFunc(c, func(err error) { span.Error(err) },
-		func() error { info, err = deleteFile(ctx, vol, root, path); return err }) {
-		return
-	}
-
-	op := OpDeleteFile
-	if info.IsDir() {
-		op = OpDeleteDir
-	}
-	d.out.Publish(ctx, makeOpLog(op, d.requestID(c), uid, path))
+	// if d.checkError(c, func(err error) {
+	// 	span.Errorf("uid=%v delete snapshot %s error: %s", uid, args.Path, err.Error())
+	// }, vol.DeleteDirSnapshot(ctx, args.Version, args.Path.String())) {
+	// 	return
+	// }
 	c.Respond()
 }

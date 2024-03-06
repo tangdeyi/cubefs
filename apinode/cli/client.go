@@ -145,9 +145,18 @@ func (c *client) MetaGet(path string) (r drive.GetPropertiesResult, err error) {
 	return
 }
 
-func (c *client) ListDir(path, marker, limit, filter string) (r drive.ListDirResult, err error) {
-	err = c.requestWith(get, genURI("/v1/files",
-		"path", path, "marker", marker, "limit", limit, "filter", filter), nil, &r)
+func (c *client) MetaBatch(paths []string) (r drive.BatchUploadFileResult, err error) {
+	err = c.requestWith(post, genURI("/v1/files/properties"), argsBatchPath(paths), &r)
+	return
+}
+
+func (c *client) ListDir(path, marker string, limit int, filter [][]string) (r drive.ListDirResult, err error) {
+	err = c.requestWith(post, genURI("/v1/files"), listBody(path, marker, limit, filter), &r)
+	return
+}
+
+func (c *client) ListAll(path, marker string, limit int, filter [][]string) (r drive.ListAllResult, err error) {
+	err = c.requestWith(post, genURI("/v1/files/recursive"), listBody(path, marker, limit, filter), &r)
 	return
 }
 
@@ -215,15 +224,7 @@ func (c *client) FileDelete(path string, recursive bool) error {
 }
 
 func (c *client) FileBatchDelete(paths []string) (r drive.BatchDeleteResult, err error) {
-	files := make([]drive.FilePath, 0, len(paths))
-	for idx := range paths {
-		files = append(files, drive.FilePath(paths[idx]))
-	}
-	b, err := json.Marshal(drive.ArgsBatchDelete{Paths: files})
-	if err != nil {
-		panic(err)
-	}
-	err = c.requestWith(del, genURI("/v1/files/batch"), bytes.NewReader(b), &r)
+	err = c.requestWith(del, genURI("/v1/files/batch"), argsBatchPath(paths), &r)
 	return
 }
 
@@ -264,9 +265,8 @@ func (c *client) FileBatchUpload(files []cliFile) (r drive.BatchUploadFileResult
 	return
 }
 
-func (c *client) FileBatchDownload(files []string) (err error) {
-	data, _ := json.Marshal(files)
-	req, err := http.NewRequest(post, host+genURI("/v1/files/contents"), bytes.NewReader(data))
+func (c *client) FileBatchDownload(paths []string) (err error) {
+	req, err := http.NewRequest(post, host+genURI("/v1/files/contents"), argsBatchPath(paths))
 	if err != nil {
 		return
 	}
@@ -310,13 +310,21 @@ func (c *client) FileBatchDownload(files []string) (err error) {
 	return
 }
 
+func (c *client) SnapshotCreate(path, ver string) error {
+	return c.request(post, genURI("/v1/snapshot", "path", path, "ver", ver), nil)
+}
+
+func (c *client) SnapshotDelete(path, ver string) error {
+	return c.request(del, genURI("/v1/snapshot", "path", path, "ver", ver), nil)
+}
+
 func (c *client) MPInit(path, fileID string, meta ...string) (r drive.RespMPuploads, err error) {
 	err = c.requestWith(post, genURI(_pmp, "path", path, "fileId", fileID), nil, &r, meta...)
 	return
 }
 
 func (c *client) MPComplete(path, uploadID string, body io.Reader) (r drive.FileInfo, err error) {
-	err = c.requestWith(post, genURI(_pmp, "path", path, "uploadId", uploadID), body, &r)
+	err = c.requestWith(post, genURI(_pmp, "path", path, "uploadId", uploadID, "synchrony", "true"), body, &r)
 	return
 }
 
@@ -362,4 +370,23 @@ func getRange(from, to int) string {
 		return fmt.Sprintf("bytes=-%d", to)
 	}
 	return "bytes="
+}
+
+func listBody(path, marker string, limit int, filter [][]string) io.Reader {
+	body, _ := json.Marshal(drive.ArgsList{
+		Path:   drive.FilePath(path),
+		Marker: marker,
+		Limit:  limit,
+		Filter: filter,
+	})
+	return bytes.NewReader(body)
+}
+
+func argsBatchPath(paths []string) io.Reader {
+	var args drive.ArgsBatchPath
+	for _, path := range paths {
+		args.Paths = append(args.Paths, drive.FilePath(path))
+	}
+	b, _ := json.Marshal(args)
+	return bytes.NewReader(b)
 }
