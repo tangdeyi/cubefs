@@ -4197,8 +4197,6 @@ func (m *Server) getVol(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-const fileIdCntOnce = 10000
-
 func (m *Server) allocFileId(w http.ResponseWriter, r *http.Request) {
 	var err error
 
@@ -4207,7 +4205,7 @@ func (m *Server) allocFileId(w http.ResponseWriter, r *http.Request) {
 		doStatAndMetric(proto.ClientAllocFileId, metric, err, nil)
 	}()
 
-	id, err := m.cluster.idAlloc.allocateFileId(fileIdCntOnce)
+	id, err := m.cluster.idAlloc.allocateFileId(proto.AllocFileIdCntOnce)
 	if err != nil {
 		sendErrReply(w, r, newErrHTTPReply(proto.ErrInternalError))
 		return

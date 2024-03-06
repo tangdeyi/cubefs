@@ -1003,3 +1003,8 @@ const (
 const (
 	LFClient = 1 // low frequency client
 )
+
+const (
+	AllocFileIdCntOnce        = 1000000
+	AsyncAllocFileIdThreshold = AllocFileIdCntOnce / 2
+)

@@ -1278,6 +1278,9 @@ func (c *Cluster) loadVols() (err error) {
 		}
 		vol := newVolFromVolValue(vv)
 		vol.Status = vv.Status
+		vol.initQuotaManager(c)
+		vol.initUidSpaceManager(c)
+		
 		if err = c.loadAclList(vol); err != nil {
 			log.LogInfof("action[loadVols],vol[%v] load acl manager error %v", vol.Name, err)
 			continue

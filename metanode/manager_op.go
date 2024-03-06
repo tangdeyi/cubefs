@@ -1527,7 +1527,7 @@ func (m *metadataManager) opMetaBatchInodeGet(conn net.Conn, p *Packet,
 	err = mp.InodeGetBatch(req, p)
 	m.respondToClient(conn, p)
 	log.LogDebugf("%s [opMetaBatchInodeGet] req: %d - %v, resp: %v, "+
-		"body: %s", remoteAddr, p.GetReqID(), req, p.GetResultMsg(), p.Data)
+		"body: %s", remoteAddr, p.GetReqID(), len(req.Inodes), p.GetResultMsg(), p.Data)
 	return
 }
 

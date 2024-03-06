@@ -3,6 +3,7 @@ package impl
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cubefs/cubefs/proto"
@@ -19,7 +20,10 @@ type cluster struct {
 	masterAddr string
 	clusterId  string
 	lock       sync.RWMutex
+
 	fileId     *proto.FileId
+	nextFileId *proto.FileId
+	asyncFlag  int32
 
 	cli sdk.IMaster
 
@@ -72,15 +76,50 @@ func (c *cluster) Info() *sdk.ClusterInfo {
 	return ci
 }
 
+func (c *cluster) asyncAllocNextFileId(ctx context.Context) {
+	if c.nextFileId != nil {
+		return
+	}
+
+	if !atomic.CompareAndSwapInt32(&c.asyncFlag, 0, 1) {
+		return
+	}
+
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	span := trace.SpanFromContextSafe(ctx)
+	span.Debugf("start alloc next file id async.")
+	fileId, err := c.cli.AllocFileId()
+	if err != nil {
+		span.Errorf("alloc file id failed, err %s", err.Error())
+		return
+	}
+
+	c.nextFileId = fileId
+	atomic.StoreInt32(&c.asyncFlag, 0)
+	span.Infof("async alloc fileId success, id %v", fileId)
+}
+
 func (c *cluster) allocFileId(ctx context.Context) (id uint64, err error) {
 	span := trace.SpanFromContextSafe(ctx)
 
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
+	if c.fileId.Begin > c.fileId.End-proto.AsyncAllocFileIdThreshold {
+		go c.asyncAllocNextFileId(ctx)
+	}
+
+Retry:
 	if c.fileId.Begin < c.fileId.End {
 		c.fileId.Begin++
 		return c.fileId.Begin, nil
+	}
+
+	if c.nextFileId != nil {
+		c.fileId = c.nextFileId
+		c.nextFileId = nil
+		goto Retry
 	}
 
 	start := time.Now()

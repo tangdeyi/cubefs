@@ -27,6 +27,7 @@ type IVolume interface {
 	ListXAttr(ctx context.Context, ino uint64) ([]string, error)
 	GetXAttrMap(ctx context.Context, ino uint64) (map[string]string, error)
 	DeleteXAttr(ctx context.Context, ino uint64, key string) error
+	BatchGetXAttr(ctx context.Context, inodes []uint64) ([]*proto.XAttrInfo, error)
 	BatchDeleteXAttr(ctx context.Context, ino uint64, keys []string) error
 
 	// Mkdir path

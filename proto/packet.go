@@ -31,7 +31,7 @@ import (
 )
 
 var (
-	GRequestID = int64(1)
+	GRequestID = time.Now().Unix()<<32 + 1
 	Buffers    *buf.BufferPool
 )
 
@@ -496,6 +496,8 @@ func (p *Packet) GetOpMsg() (m string) {
 		m = "OpMetaTxLinkInode"
 	case OpMetaTxGet:
 		m = "OpMetaTxGet"
+	case OpMetaGetUniqID:
+		m = "OpMetaGetUniqID"
 	case OpMetaBatchSetInodeQuota:
 		m = "OpMetaBatchSetInodeQuota"
 	case OpMetaBatchDeleteInodeQuota:

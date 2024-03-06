@@ -31,7 +31,9 @@ type LeaderInfo struct {
 func (m *Server) handleLeaderChange(leader uint64) {
 	if leader == 0 {
 		log.LogWarnf("action[handleLeaderChange] but no leader")
-		WarnMetrics.reset()
+		if WarnMetrics != nil {
+			WarnMetrics.reset()
+		}
 		return
 	}
 
@@ -62,7 +64,9 @@ func (m *Server) handleLeaderChange(leader uint64) {
 		m.cluster.metaReady = false
 		m.cluster.masterClient.AddNode(m.leaderInfo.addr)
 		m.cluster.masterClient.SetLeader(m.leaderInfo.addr)
-		WarnMetrics.reset()
+		if WarnMetrics != nil {
+			WarnMetrics.reset()
+		}
 	}
 }
 
@@ -215,9 +219,14 @@ func (m *Server) clearMetadata() {
 	m.cluster.clearDataNodes()
 	m.cluster.clearMetaNodes()
 	m.cluster.clearVols()
-	m.user.clearUserStore()
-	m.user.clearAKStore()
-	m.user.clearVolUsers()
+
+	if m.user != nil {
+		//leader change event may be before m.user initialization
+		m.user.clearUserStore()
+		m.user.clearAKStore()
+		m.user.clearVolUsers()
+	}
+	
 	m.cluster.t = newTopology()
 	//m.cluster.apiLimiter.Clear()
 }

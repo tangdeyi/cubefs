@@ -748,6 +748,7 @@ type BatchGetXAttrRequest struct {
 	PartitionId uint64   `json:"pid"`
 	Inodes      []uint64 `json:"inos"`
 	Keys        []string `json:"keys"`
+	ListAll     bool     `json:"listall"`
 }
 
 type BatchGetXAttrResponse struct {

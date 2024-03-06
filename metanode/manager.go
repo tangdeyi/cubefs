@@ -108,13 +108,22 @@ func enableAudit(p *Packet) bool {
 	return true
 }
 
+func getData(p *Packet) string {
+	switch p.Opcode {
+	case proto.OpMetaBatchGetXAttr, proto.OpMetaBatchInodeGet:
+		return ""
+	default:
+		return string(p.Data)
+	}
+}
+
 // HandleMetadataOperation handles the metadata operations.
 func (m *metadataManager) HandleMetadataOperation(conn net.Conn, p *Packet, remoteAddr string) (err error) {
 	start := time.Now()
 
 	audit := enableAudit(p)
 	if audit {
-		log.LogAuditf("HandleMetadataOperation input info op (%s), remote %s, data %s", p.String(), remoteAddr, string(p.Data))
+		log.LogAuditf("HandleMetadataOperation input info op (%s), remote %s, data %s", p.String(), remoteAddr, getData(p))
 	}
 
 	metric := exporter.NewTPCnt(p.GetOpMsg())

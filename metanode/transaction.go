@@ -20,12 +20,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"golang.org/x/time/rate"
 	"net"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/time/rate"
 
 	"github.com/cubefs/cubefs/proto"
 	"github.com/cubefs/cubefs/util"
@@ -660,6 +661,11 @@ func (tm *TransactionManager) registerTransaction(txInfo *proto.TransactionInfo)
 			dentry.SetCreateTime(txInfo.CreateTime)
 			dentry.SetTimeout(txInfo.Timeout)
 			dentry.SetTxId(txInfo.TxID)
+		}
+
+		if info := tm.getTransaction(txInfo.TxID); info != nil {
+			log.LogWarnf("tx is already exist, txId %s, info %v", txInfo.TxID, info.String())
+			return fmt.Errorf("tx is already exist, txId %s", txInfo.TxID)
 		}
 	}
 

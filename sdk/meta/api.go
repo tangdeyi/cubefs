@@ -601,7 +601,7 @@ func (mw *MetaWrapper) InodeDelete_ll(inode uint64) error {
 	return nil
 }
 
-func (mw *MetaWrapper) BatchGetXAttr(inodes []uint64, keys []string) ([]*proto.XAttrInfo, error) {
+func (mw *MetaWrapper) BatchGetXAttrEx(inodes []uint64, keys []string, listAll bool) ([]*proto.XAttrInfo, error) {
 	// Collect meta partitions
 	var (
 		mps      = make(map[uint64]*MetaPartition) // Mapping: partition ID -> partition
@@ -625,7 +625,7 @@ func (mw *MetaWrapper) BatchGetXAttr(inodes []uint64, keys []string) ([]*proto.X
 		wg.Add(1)
 		go func(mp *MetaPartition, inodes []uint64, keys []string) {
 			defer wg.Done()
-			xattrs, err := mw.batchGetXAttr(mp, inodes, keys)
+			xattrs, err := mw.batchGetXAttr(mp, inodes, keys, listAll)
 			if err != nil {
 				errorsCh <- err
 				log.LogErrorf("BatchGetXAttr: get xattr fail: volume(%v) partitionID(%v) inodes(%v) keys(%v) err(%s)",
@@ -654,7 +654,31 @@ func (mw *MetaWrapper) BatchGetXAttr(inodes []uint64, keys []string) ([]*proto.X
 		}
 		xattrs = append(xattrs, info)
 	}
-	return xattrs, nil
+
+	if !listAll {
+		return xattrs, nil
+	}
+
+	// sort reslut by input inodes
+	attrM := make(map[uint64]*proto.XAttrInfo)
+	for _, a := range xattrs {
+		attrM[a.Inode] = a
+	}
+
+	result := make([]*proto.XAttrInfo, 0, len(inodes))
+	for _, i := range inodes {
+		a, ok := attrM[i]
+		if !ok {
+			result = append(result, &proto.XAttrInfo{Inode: i, XAttrs: make(map[string]string)})
+		}
+		result = append(result, a)
+	}
+
+	return result, nil
+}
+
+func (mw *MetaWrapper) BatchGetXAttr(inodes []uint64, keys []string) ([]*proto.XAttrInfo, error) {
+	return mw.BatchGetXAttrEx(inodes, keys, false)
 }
 
 func (mw *MetaWrapper) Delete_ll(parentID uint64, name string, isDir bool) (*proto.InodeInfo, error) {
@@ -1325,7 +1349,7 @@ func (mw *MetaWrapper) DentryCreateEx_ll(req *proto.CreateDentryRequest) error {
 	}
 
 	_, err := mw.InodeUnlink_ll(req.OldIno)
-	if err != nil {
+	if err != nil && err != syscall.ENOENT {
 		log.LogErrorf("DentryCreateEx_ll: unlink old inode failed, req %v, err %v", req, err)
 		return err
 	}

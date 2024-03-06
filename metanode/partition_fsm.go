@@ -261,6 +261,7 @@ func (mp *metaPartition) Apply(command []byte, index uint64) (resp interface{}, 
 			quotaRebuild:   quotaRebuild,
 			uidRebuild:     uidRebuild,
 			uniqChecker:    uniqChecker,
+			uniqId:         mp.GetUniqId(),
 		}
 		log.LogDebugf("opFSMStoreTick: quotaRebuild [%v] uidRebuild [%v]", quotaRebuild, uidRebuild)
 		mp.storeChan <- msg
@@ -586,6 +587,7 @@ func (mp *metaPartition) ApplySnapshot(peers []raftproto.Peer, iter raftproto.Sn
 				txRbInodeTree:  mp.txProcessor.txResource.txRbInodeTree.GetTree(),
 				txRbDentryTree: mp.txProcessor.txResource.txRbDentryTree.GetTree(),
 				uniqChecker:    uniqChecker.clone(),
+				uniqId:         uniqID,
 			}
 			select {
 			case mp.extReset <- struct{}{}:

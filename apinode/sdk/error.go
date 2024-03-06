@@ -93,6 +93,7 @@ var (
 	ErrConflict         = &Error{Status: 409, Code: "OperationConflict", Message: "operation conflict"}
 	ErrExist            = &Error{Status: 409, Code: "OperationConflict", Message: "operation conflict"}
 	ErrTooLarge         = &Error{Status: 413, Code: "RequestTooLarge", Message: "request entity too large"}
+	ErrInodeNotExist    = &Error{Status: 404, Code: "NotFound", Message: "some inodes not exist"}
 
 	ErrInternalServerError = &Error{Status: 500, Code: "InternalServerError", Message: "internal server error"}
 	ErrBadGateway          = &Error{Status: 502, Code: "BadGateway", Message: "bad gateway"}
