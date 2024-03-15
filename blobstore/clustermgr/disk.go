@@ -26,7 +26,7 @@ import (
 	"github.com/cubefs/cubefs/blobstore/common/rpc"
 	"github.com/cubefs/cubefs/blobstore/common/trace"
 	"github.com/cubefs/cubefs/blobstore/util/errors"
-)
+) 
 
 func (s *Service) DiskIdAlloc(c *rpc.Context) {
 	ctx := c.Request.Context()

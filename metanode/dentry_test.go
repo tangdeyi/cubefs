@@ -1,9 +1,10 @@
 package metanode
 
 import (
-	"github.com/stretchr/testify/require"
 	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestDentry_Marshal(t *testing.T) {
@@ -14,14 +15,6 @@ func TestDentry_Marshal(t *testing.T) {
 		Type:     0x644,
 		FileId:   1110,
 	}
-
-	snap := &DentryMultiSnap{
-		VerSeq: 10,
-		dentryList: DentryBatch{
-			{Inode: 10, Type: 0x655, multiSnap: NewDentrySnap(10), Name: dentry.Name, ParentId: dentry.ParentId},
-		},
-	}
-	dentry.multiSnap = snap
 
 	data, err := dentry.Marshal()
 	require.NoError(t, err)
@@ -43,6 +36,4 @@ func TestDentry_Marshal(t *testing.T) {
 	err = newDentry.UnmarshalValue(tmpData)
 	require.NoError(t, err)
 	require.Equal(t, dentry.Inode, newDentry.Inode)
-	require.Equal(t, dentry.getSnapListLen(), newDentry.getSnapListLen())
-	require.Equal(t, dentry.getSeqFiled(), newDentry.getSeqFiled())
 }

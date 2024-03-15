@@ -58,4 +58,5 @@ type MasterApi interface {
 	GetClusterIP() (cp *proto.ClusterIP, err error)
 	ListVols(keywords string) (volsInfo []*proto.VolInfo, err error)
 	AllocFileId() (info *proto.FileId, err error)
+	GetVolumeSimpleInfo(volName string) (vv *proto.SimpleVolView, err error)
 }

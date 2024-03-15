@@ -18,6 +18,7 @@ var newMaster = newSdkMasterCli
 
 type cluster struct {
 	masterAddr string
+	blobAddr   string
 	clusterId  string
 	lock       sync.RWMutex
 
@@ -29,7 +30,7 @@ type cluster struct {
 
 	volLk  sync.RWMutex
 	volMap map[string]sdk.IVolume
-	newVol func(ctx context.Context, name, owner, addr string) (sdk.IVolume, error)
+	newVol func(ctx context.Context, addr, blobAddr string, vol *proto.SimpleVolView) (sdk.IVolume, error)
 }
 
 func newClusterIn(ctx context.Context, addr, cId string) (*cluster, error) {
@@ -40,11 +41,12 @@ func newClusterIn(ctx context.Context, addr, cId string) (*cluster, error) {
 
 	cl.volMap = make(map[string]sdk.IVolume)
 
-	cli, err := initMasterCli(ctx, cId, addr)
+	cli, blobAddr, err := initMasterCli(ctx, cId, addr)
 	if err != nil {
 		return nil, err
 	}
 
+	cl.blobAddr = blobAddr
 	cl.newVol = newVolume
 	cl.cli = cli
 	cl.fileId, err = cli.AllocFileId()
@@ -167,31 +169,32 @@ func (c *cluster) Addr() string {
 
 // updateAddr need check whether newAddr is valid
 func (c *cluster) UpdateAddr(ctx context.Context, addr string) error {
-	_, err := initMasterCli(ctx, c.clusterId, addr)
+	_, blobAddr, err := initMasterCli(ctx, c.clusterId, addr)
 	if err != nil {
 		return err
 	}
 	span := trace.SpanFromContextSafe(ctx)
 	span.Warnf("update cluster's addr success, cId %s, addr %s, before %s", c.clusterId, addr, c.masterAddr)
 	c.masterAddr = addr
+	c.blobAddr = blobAddr
 	return nil
 }
 
-func initMasterCli(ctx context.Context, cId, addr string) (sdk.IMaster, error) {
+func initMasterCli(ctx context.Context, cId, addr string) (sdk.IMaster, string, error) {
 	span := trace.SpanFromContextSafe(ctx)
 	cli := newMaster(addr)
 	info, err := cli.GetClusterIP()
 	if err != nil {
 		span.Errorf("user master addr request failed, addr %s, err %s", addr, err.Error())
-		return nil, masterToSdkErr(err)
+		return nil, "", masterToSdkErr(err)
 	}
 
 	if cId != info.Cluster {
 		span.Errorf("clusterId is not valid, local %s, right %s, addr %s", cId, info.Cluster, addr)
-		return nil, sdk.ErrBadRequest
+		return nil, "", sdk.ErrBadRequest
 	}
 
-	return cli, nil
+	return cli, info.EbsAddr, nil
 }
 
 func (c *cluster) scheduleUpdateVols() {
@@ -221,7 +224,13 @@ func (c *cluster) updateVols(ctx context.Context) error {
 			continue
 		}
 
-		newVol, err := c.newVol(ctx, vol.Name, vol.Owner, c.masterAddr)
+		view, err := c.cli.GetVolumeSimpleInfo(vol.Name)
+		if err != nil {
+			span.Errorf("get simple volume view failed, name %s, err %s", vol.Name, err.Error())
+			return masterToSdkErr(err)
+		}
+
+		newVol, err := c.newVol(ctx, c.masterAddr, c.blobAddr, view)
 		if err != nil {
 			span.Errorf("new volume failed, name %s, err %s", vol.Name, err.Error())
 			returnErr = err

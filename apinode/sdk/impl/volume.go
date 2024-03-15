@@ -16,12 +16,15 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cubefs/cubefs/apinode/sdk"
+	"github.com/cubefs/cubefs/blobstore/api/access"
 	"github.com/cubefs/cubefs/blobstore/common/trace"
 	"github.com/cubefs/cubefs/blobstore/util/taskpool"
 	"github.com/cubefs/cubefs/proto"
+	"github.com/cubefs/cubefs/sdk/data/blobstore"
 	"github.com/cubefs/cubefs/sdk/data/stream"
 	"github.com/cubefs/cubefs/sdk/meta"
 	"github.com/cubefs/cubefs/util"
+	"github.com/cubefs/cubefs/util/buf"
 )
 
 var (
@@ -30,10 +33,12 @@ var (
 )
 
 type volume struct {
-	mw    sdk.MetaOp
-	ec    sdk.DataOp
-	name  string
-	owner string
+	mw      sdk.MetaOp
+	ec      sdk.DataOp
+	name    string
+	owner   string
+	volType int
+	blobCfg *blobstore.ClientConfig
 }
 
 type DataOpImp struct {
@@ -61,24 +66,24 @@ func newDataOp(cfg *stream.ExtentConfig) (sdk.DataOp, error) {
 	return &DataOpImp{ExtentClient: ec}, nil
 }
 
-func newVolume(ctx context.Context, name, owner, addr string) (sdk.IVolume, error) {
+func newVolume(ctx context.Context, addr, blobAddr string, vol *proto.SimpleVolView) (sdk.IVolume, error) {
 	span := trace.SpanFromContextSafe(ctx)
 
 	addrList := strings.Split(addr, ",")
 	metaCfg := &meta.MetaConfig{
-		Volume:  name,
-		Owner:   owner,
+		Volume:  vol.Name,
+		Owner:   vol.Owner,
 		Masters: addrList,
 	}
 
 	mw, err := newMetaWrapper(metaCfg)
 	if err != nil {
-		span.Warnf("init meta wrapper failed, name %s, owner %s, addr %s", name, owner, addr)
+		span.Warnf("init meta wrapper failed, name %s, owner %s, addr %s", vol.Name, vol.Owner, addr)
 		return nil, sdk.ErrInternalServerError
 	}
 
 	ecCfg := &stream.ExtentConfig{
-		Volume:                       name,
+		Volume:                       vol.Name,
 		Masters:                      addrList,
 		MinWriteAbleDataPartitionCnt: 10,
 		FollowerRead:                 false,
@@ -87,24 +92,77 @@ func newVolume(ctx context.Context, name, owner, addr string) (sdk.IVolume, erro
 		OnTruncate:                   mw.Truncate,
 	}
 
-	if mw1, ok := mw.(*metaOpImp); ok {
+	mw1, ok := mw.(*metaOpImp)
+	if ok {
 		ecCfg.OnAppendExtentKey = mw1.AppendExtentKey
 	}
 
 	ec, err := newExtentClient(ecCfg)
 	if err != nil {
-		span.Warnf("init extent client failed, name %s, owner %s, addr %s", name, owner, addr)
+		span.Warnf("init extent client failed, name %s, owner %s, addr %s", vol.Name, vol.Owner, addr)
 		return nil, sdk.ErrInternalServerError
 	}
 
 	v := &volume{
-		mw:    mw,
-		ec:    ec,
-		owner: owner,
-		name:  name,
+		mw:      mw,
+		ec:      ec,
+		volType: vol.VolType,
+		owner:   vol.Owner,
+		name:    vol.Name,
+	}
+
+	if proto.IsCold(vol.VolType) {
+		blobC, err := blobstore.NewEbsClient(access.Config{
+			ConnMode:       access.NoLimitConnMode,
+			MaxSizePutOnce: 1 << 23,
+			Consul: access.ConsulConfig{
+				Address: blobAddr,
+			},
+		})
+
+		if err != nil {
+			span.Errorf("init ebs client failed, name %s, err %s", vol.Name, err.Error())
+			return nil, sdk.ErrInternalServerError
+		}
+
+		v.blobCfg = &blobstore.ClientConfig{
+			VolName:         vol.Name,
+			VolType:         vol.VolType,
+			BlockSize:       vol.ObjBlockSize,
+			Bc:              nil,
+			Mw:              mw1.MetaWrapper,
+			Ec:              ec.(*DataOpImp).ExtentClient,
+			Ebsc:            blobC,
+			EnableBcache:    false,
+			WConcurrency:    4,
+			ReadConcurrency: 4,
+			CacheAction:     vol.CacheAction,
+			FileCache:       false,
+			FileSize:        0,
+			CacheThreshold:  0,
+		}
+
+		buf.InitCachePool(vol.ObjBlockSize)
 	}
 
 	return v, nil
+}
+
+func (v *volume) copyBlobCfg() blobstore.ClientConfig {
+	cfg := *v.blobCfg
+	return cfg
+}
+
+func (v *volume) getBlobWriter(ino uint64) *blobstore.Writer {
+	cfg := v.copyBlobCfg()
+	cfg.Ino = ino
+	return blobstore.NewWriter(cfg)
+}
+
+func (v *volume) getBlobReader(ino uint64) *blobstore.Reader {
+	cfg := v.copyBlobCfg()
+	cfg.Ino = ino
+	return blobstore.NewReader(cfg)
 }
 
 func (v *volume) setAllocFunc(allocId func(ctx context.Context) (id uint64, err error)) {
@@ -484,7 +542,7 @@ func (v *volume) UploadFile(ctx context.Context, req *sdk.UploadFileReq) (*sdk.I
 	}
 
 	tmpIno := tmpInoInfo.Inode
-	hasCreateFile := true
+	hasCreateFile := false
 	defer func() {
 		// remove inode once error not nil
 		if err != nil {
@@ -558,10 +616,10 @@ func (v *volume) UploadFile(ctx context.Context, req *sdk.UploadFileReq) (*sdk.I
 		Mode:     defaultFileMode,
 	}
 
+	hasCreateFile = true
 	id, err := v.mw.CreateDentryEx(ctx, dirReq)
 	if err != nil {
 		span.Warnf("dentryCreateEx failed, parent %d, name %s, ino %d", req.ParIno, req.Name, req.OldFileId)
-		hasCreateFile = true
 		return nil, 0, syscallToErr(err)
 	}
 
@@ -584,6 +642,28 @@ func (v *volume) writeAt(ctx context.Context, ino uint64, off, size int, body io
 	}
 	defer proto.Buffers.Put(buf)
 
+	var blobWriter *blobstore.Writer
+	if proto.IsCold(v.volType) {
+		blobWriter = v.getBlobWriter(ino)
+		defer func() {
+			if err != nil {
+				return
+			}
+
+			err = blobWriter.Flush(ino, ctx)
+			if err != nil {
+				span.Warnf("blob flush failed after write, ino %d, err %s", ino, err.Error())
+			}
+		}()
+	}
+
+	wf := func(inode uint64, offset int, data []byte, flags int) (write int, err error) {
+		if proto.IsCold(v.volType) {
+			return blobWriter.Write(ctx, offset, data, proto.FlagsAppend)
+		}
+		return v.ec.Write(inode, offset, data, 0)
+	}
+
 	for {
 		n, err := body.Read(buf)
 		if err != nil && err != io.EOF {
@@ -592,7 +672,7 @@ func (v *volume) writeAt(ctx context.Context, ino uint64, off, size int, body io
 		}
 
 		if n > 0 {
-			wn, err = v.ec.Write(ino, off, buf[:n], 0)
+			wn, err = wf(ino, off, buf[:n], 0)
 			if err != nil {
 				span.Warnf("write file failed, ino %d, off %d, err %s", ino, off, err.Error())
 				return 0, syscallToErr(err)
@@ -613,6 +693,11 @@ func (v *volume) writeAt(ctx context.Context, ino uint64, off, size int, body io
 
 func (v *volume) WriteFile(ctx context.Context, ino, off, size uint64, body io.Reader) error {
 	span := trace.SpanFromContextSafe(ctx)
+
+	if proto.IsCold(v.volType) {
+		span.Warnf("not allow to write on blobstore volume, name %s, ino %d", v.name, ino)
+		return sdk.ErrWriteOnBlob
+	}
 
 	if err := v.ec.OpenStream(ino); err != nil {
 		span.Warnf("open stream failed, ino %d, off %s, err %s", ino, off, err.Error())
@@ -645,7 +730,13 @@ func (v *volume) ReadFile(ctx context.Context, ino, off uint64, data []byte) (n 
 		}
 	}()
 
-	n, err = v.ec.Read(ino, data, int(off), len(data))
+	if proto.IsCold(v.volType) {
+		blobReader := v.getBlobReader(ino)
+		n, err = blobReader.Read(ctx, data, int(off), len(data))
+	} else {
+		n, err = v.ec.Read(ino, data, int(off), len(data))
+	}
+
 	if err != nil && err != io.EOF {
 		span.Warnf("read file failed, ino %d, off %d, err %s", ino, off, err.Error())
 		return 0, syscallToErr(err)
