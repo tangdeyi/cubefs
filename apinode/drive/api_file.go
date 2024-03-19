@@ -49,6 +49,7 @@ type ArgsFileUpload struct {
 	Path   FilePath `json:"path"`
 	FileID uint64   `json:"fileId,omitempty"`
 	Force  bool     `json:"force,omitempty"`
+	Dry    bool     `json:"dry,omitempty"`
 }
 
 func (d *DriveNode) handleFileUpload(c *rpc.Context) {
@@ -73,6 +74,16 @@ func (d *DriveNode) handleFileUpload(c *rpc.Context) {
 
 	if d.checkError(c, func(err error) { span.Errorf("lookup %+v error: %v", args, err) },
 		d.lookupFileID(ctx, vol, ino, filename, &args.FileID, args.Force)) {
+		return
+	}
+
+	if args.Dry {
+		stt := time.Now()
+		var n int64
+		n, err = io.Copy(io.Discard, c.Request.Body)
+		span.AppendTrackLog("cfudry", stt, err)
+		span.Infof("dry run read size %d %v", n, args)
+		d.respError(c, sdk.ErrBadRequest.Extend("dry run"))
 		return
 	}
 

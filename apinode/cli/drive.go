@@ -448,7 +448,11 @@ func addCmdMultipart(cmd *grumble.Command) {
 				return err
 			}
 			defer fd.Close()
-			return show(cli.MPComplete(f("path"), f("uploadid"), fd))
+			buff, err := io.ReadAll(fd)
+			if err != nil {
+				return err
+			}
+			return show(cli.MPComplete(f("path"), f("uploadid"), bytes.NewReader(buff)))
 		},
 	})
 	mpCommand.AddCommand(&grumble.Command{
