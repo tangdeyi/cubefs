@@ -1018,9 +1018,6 @@ func (v *volume) CompleteMultiPart(ctx context.Context, req *sdk.CompleteMultipa
 		}
 	}()
 
-	totalExtents := make([]proto.ExtentKey, 0)
-	fileOffset := uint64(0)
-
 	cnt := sdk.MaxPoolSize
 	if cnt > len(partArr) {
 		cnt = len(partArr)
@@ -1029,8 +1026,9 @@ func (v *volume) CompleteMultiPart(ctx context.Context, req *sdk.CompleteMultipa
 	pool := taskpool.New(cnt, len(partArr))
 	defer pool.Close()
 	type result struct {
-		eks []proto.ExtentKey
-		err error
+		eks    []proto.ExtentKey
+		objEks []proto.ObjExtentKey
+		err    error
 	}
 	resArr := make([]result, len(partArr))
 	lk := sync.Mutex{}
@@ -1042,30 +1040,58 @@ func (v *volume) CompleteMultiPart(ctx context.Context, req *sdk.CompleteMultipa
 		wg.Add(1)
 		pool.Run(func() {
 			defer wg.Done()
-			_, _, eks, newErr := v.mw.GetExtents(ino)
-			if newErr != nil {
-				span.Warnf("get part extent failed, ino %d, err %s", ino, newErr.Error())
+			if proto.IsHot(v.volType) {
+				_, _, eks, newErr := v.mw.GetExtents(ino)
+				if newErr != nil {
+					span.Warnf("get part extent failed, ino %d, err %s", ino, newErr.Error())
+				}
+				lk.Lock()
+				resArr[tmpIdx] = result{eks: eks, err: newErr}
+				lk.Unlock()
+			} else {
+				_, _, _, objEks, newErr := v.mw.GetObjExtents(ino)
+				if newErr != nil {
+					span.Warnf("get part obj extent failed, ino %d, err %s", ino, newErr.Error())
+				}
+				lk.Lock()
+				resArr[tmpIdx] = result{objEks: objEks, err: newErr}
+				lk.Unlock()
 			}
-			lk.Lock()
-			resArr[tmpIdx] = result{eks: eks, err: newErr}
-			lk.Unlock()
 		})
 	}
 	wg.Wait()
+
+	totalExtents := make([]proto.ExtentKey, 0)
+	totalObjExtents := make([]proto.ObjExtentKey, 0)
+	fileOffset := uint64(0)
 
 	for _, r := range resArr {
 		if r.err != nil {
 			return nil, 0, syscallToErr(r.err)
 		}
 
-		for _, ek := range r.eks {
-			ek.FileOffset = fileOffset
-			fileOffset += uint64(ek.Size)
-			totalExtents = append(totalExtents, ek)
+		if proto.IsCold(v.volType) {
+			for _, ek := range r.objEks {
+				ek.FileOffset = fileOffset
+				fileOffset += uint64(ek.Size)
+				totalObjExtents = append(totalObjExtents, ek)
+			}
+		} else {
+			for _, ek := range r.eks {
+				ek.FileOffset = fileOffset
+				fileOffset += uint64(ek.Size)
+				totalExtents = append(totalExtents, ek)
+			}
 		}
+
 	}
 
-	err = v.mw.AppendExtentKeys(cIno, totalExtents)
+	if proto.IsCold(v.volType) {
+		err = v.mw.AppendObjExtentKeys(cIno, totalObjExtents)
+	} else {
+		err = v.mw.AppendExtentKeys(cIno, totalExtents)
+	}
+
 	if err != nil {
 		span.Warnf("append ino to complete ino failed, ino %d, err %s", cIno, err.Error())
 		return nil, 0, syscallToErr(err)
