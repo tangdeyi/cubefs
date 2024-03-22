@@ -667,19 +667,13 @@ func (s *DataNode) handleExtentRepairReadPacket(p *repl.Packet, connect net.Conn
 		err error
 	)
 
-	defer func() {
-		if err != nil {
-			p.PackErrorBody(ActionStreamRead, err.Error())
-			p.WriteToConn(connect)
-			return
-		}
-		fininshDoExtentRepair()
-	}()
-
 	err = requestDoExtentRepair()
 	if err != nil {
+		p.PackErrorBody(ActionStreamRead, err.Error())
+		p.WriteToConn(connect)
 		return
 	}
+	defer fininshDoExtentRepair()
 	partition := p.Object.(*DataPartition)
 	if !partition.disk.RequireReadExtentToken(partition.partitionID) {
 		err = storage.NoDiskReadRepairExtentTokenError
