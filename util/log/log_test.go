@@ -141,7 +141,7 @@ func TestLogLeftSpaceLimit02(t *testing.T) {
 		t.Errorf("init log err[%v]", err)
 		return
 	}
-	
+
 	defer os.RemoveAll(tmpDir)
 	log.rotate.SetHeadRoomMb(int64(diskSpaceLeft/1024/1024 + 1))
 
