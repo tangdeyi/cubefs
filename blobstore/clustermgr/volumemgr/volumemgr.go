@@ -792,7 +792,7 @@ func (v *VolumeMgr) loop() {
 					default:
 					}
 
-					// 创建当前CodeMode下的idle空闲卷，生成卷(预分配卷)的核心逻辑
+					// 创建当前CodeMode下的idle空闲卷，生成卷的核心逻辑
 					err := v.createVolume(ctx, modeConfig.mode)
 					if err != nil {
 						span_.Errorf("create volume failed ==> %s", errors.Detail(err))

@@ -52,24 +52,30 @@ type RaftMembers struct {
 
 type RaftMember struct {
 	ID       uint64 `json:"id"`
-	Host     string `json:"host"`
+	Host     string `json:"host"` // raft通信ip+port
 	Learner  bool   `json:"learner"`
-	NodeHost string `json:"node_host"`
+	NodeHost string `json:"node_host"` // server对外ip+port
 }
 
 type RaftNode struct {
+	// 主节点Host，Ip:port
 	leaderHost string
 	// currentApplyIndex is the memory current apply index, it's not stable
+	// 内存中记录的已经应用的ApplyIndex，不可能apply一个entry就去持久化，这样性能太差
 	currentApplyIndex uint64
 	// stableApplyIndex is the persistent apply index and it's stable
+	// 持久化记录的已经应用的ApplyIndex，内存中的currentApplyIndex会定期持久化成为stableApplyIndex
 	stableApplyIndex uint64
 	// truncateApplyIndex record last truncated apply index
+	// 记录上次truncate wal日志时的ApplyIndex，判断是否要truncate wal日志时会用到
 	truncateApplyIndex uint64
 	// openSnapshotsNum record opening snapshot num currently
+	// 记录当前进行中的snapshot，保证snapshot过程中不进行wal log的truncate
 	openSnapshotsNum int32
 	// appliers record all registered RaftApplier
 	appliers []RaftApplier
-	nodes    map[uint64]string
+	// nodeID <--> nodeHost(server对外IP+Port)
+	nodes map[uint64]string
 
 	lock        sync.RWMutex
 	closeCh     chan interface{}
@@ -92,36 +98,36 @@ func NewRaftNode(cfg *RaftNodeConfig, raftDB *raftdb.RaftDB, snapshotDBs map[str
 	}
 
 	raftNode := &RaftNode{
-		snapshotDBs:    snapshotDBs,
-		raftDB:         raftDB,
+		snapshotDBs:    snapshotDBs, // 持久化数据的DB，新增节点走snapshot时需要
+		raftDB:         raftDB,      // 持久化applyIndex和members的DB
 		RaftNodeConfig: cfg,
 
-		currentApplyIndex: cfg.ApplyIndex,
-		stableApplyIndex:  cfg.ApplyIndex,
+		currentApplyIndex: cfg.ApplyIndex, // 内存中记录的当前applyIndex
+		stableApplyIndex:  cfg.ApplyIndex, // 持久化DB中记录的applyIndex，会定期持久化更新
 		// set truncateApplyIndex into last apply index - truncate num interval
 		// it may not equal to the actual value, but it'll be fix by next truncation
-		truncateApplyIndex: cfg.ApplyIndex - cfg.TruncateNumInterval,
+		truncateApplyIndex: cfg.ApplyIndex - cfg.TruncateNumInterval, // 上次truncate时applyIndex值
 
 		closeCh: make(chan interface{}),
 
-		nodes: make(map[uint64]string),
+		nodes: make(map[uint64]string), // nodeID <--> nodeHost(service对外服务IP+port)
 	}
 
-	members, err := raftNode.GetRaftMembers(context.Background())
+	members, err := raftNode.GetRaftMembers(context.Background()) // 获取持久化DB记录中的members
 	if err != nil {
 		return nil, err
 	}
 
 	needWrite := false
 	if len(members) == 0 {
-		needWrite = true
+		needWrite = true // 新部署节点，需要将配置中的members持久化
 		members = raftNode.RaftNodeConfig.Members
 	}
 
 	for i := 0; i < len(members); i++ {
 		// Configuration compatible with older versions
 		member := &members[i]
-		if member.NodeHost == "" {
+		if member.NodeHost == "" { // 历史上NodeHost这个配置为空
 			needWrite = true
 			for _, cm := range raftNode.RaftNodeConfig.Members {
 				if member.ID == cm.ID && cm.Host == member.Host {
@@ -144,6 +150,7 @@ func NewRaftNode(cfg *RaftNodeConfig, raftDB *raftdb.RaftDB, snapshotDBs map[str
 		if err != nil {
 			return nil, err
 		}
+		// 持久化members记录到DB
 		if err = raftDB.Put(RaftMemberKey, val); err != nil {
 			return nil, err
 		}
@@ -163,6 +170,7 @@ func (r *RaftNode) RegistRaftApplier(target interface{}) {
 	iface := reflect.TypeOf(new(RaftApplier)).Elem()
 	vals := reflect.ValueOf(target).Elem()
 	typs := vals.Type()
+	// 找到target下实现了iface接口的字段，将其注册到appliers中
 	for i := 0; i < vals.NumField(); i++ {
 		field := typs.Field(i)
 		if field.Type.Implements(iface) {
@@ -388,7 +396,7 @@ func (r *RaftNode) CreateRaftSnapshot(patchNum int) raftserver.Snapshot {
 	}
 }
 
-// ApplyRaftSnapshot apply snapshot's data into db
+// ApplyRaftSnapshot apply snapshot's data into db and then load into memory
 func (r *RaftNode) ApplyRaftSnapshot(ctx context.Context, st raftserver.Snapshot) error {
 	var (
 		err   error
@@ -430,6 +438,7 @@ func (r *RaftNode) ApplyRaftSnapshot(ctx context.Context, st raftserver.Snapshot
 		return err
 	}
 	// applier LoadData callback
+	// 加载上面的snapshot持久化数据
 	for _, applier := range r.appliers {
 		if err := applier.LoadData(ctx); err != nil {
 			span.Errorf("applier[%s] load data failed, err: %s", applier.GetModuleName(), err.Error())

@@ -187,6 +187,7 @@ func New(cfg *Config) (*Service, error) {
 	if err != nil {
 		log.Fatalf("open volume database failed, err: %v", err)
 	}
+	// raftDB：用来持久化raft appliedIndex和members信息
 	raftDB, err := raftdb.OpenRaftDB(cfg.RaftConfig.RaftDBPath, kvstore.WithCatchSize(cfg.DBCacheSize))
 	if err != nil {
 		log.Fatalf("open raft database failed, err: %v", err)
@@ -249,7 +250,7 @@ func New(cfg *Config) (*Service, error) {
 
 	// raft server initial
 	applyIndex := uint64(0)
-	rawApplyIndex, err := raftDB.Get(base.ApplyIndexKey)
+	rawApplyIndex, err := raftDB.Get(base.ApplyIndexKey) // 获取持久化的applyIndex
 	if err != nil {
 		log.Fatalf("get raft apply index from kv store failed, err: %v", err)
 	}
@@ -257,7 +258,7 @@ func New(cfg *Config) (*Service, error) {
 		applyIndex = binary.BigEndian.Uint64(rawApplyIndex)
 	}
 
-	// raft node initial
+	// raft node 初始化
 	cfg.RaftConfig.RaftNodeConfig.ApplyIndex = applyIndex
 	raftNode, err := base.NewRaftNode(&cfg.RaftConfig.RaftNodeConfig, raftDB, service.dbs)
 	if err != nil {
@@ -267,16 +268,17 @@ func New(cfg *Config) (*Service, error) {
 	raftNode.RegistRaftApplier(service)
 	service.raftNode = raftNode
 
-	cfg.RaftConfig.ServerConfig.SM = service
-	cfg.RaftConfig.ServerConfig.Applied = applyIndex
-	members, err := raftNode.GetRaftMembers(context.Background())
+	// raft server初始化
+	cfg.RaftConfig.ServerConfig.SM = service                      // raft状态机
+	cfg.RaftConfig.ServerConfig.Applied = applyIndex              // 最新的applyIndex
+	members, err := raftNode.GetRaftMembers(context.Background()) // 获取持久化DB的members
 	if err != nil {
 		log.Fatalf("get raft members failed, err: %v", err.Error())
 	}
 
 	log.Infof("config members: %+v, raftdb members: %+v", cfg.RaftConfig.RaftNodeConfig.Members, members)
 
-	for _, member := range members {
+	for _, member := range members { // 根据node members记录初始化server members配置
 		m := raftserver.Member{NodeID: member.ID, Host: member.Host, Learner: member.Learner, Context: []byte(member.NodeHost)}
 		cfg.RaftConfig.ServerConfig.Members = append(cfg.RaftConfig.ServerConfig.Members, m)
 	}

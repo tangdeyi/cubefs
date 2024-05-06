@@ -139,6 +139,7 @@ func (s *Service) Apply(data [][]byte, index uint64) error {
 	return nil
 }
 
+// raftStorage实现了raft的Storage接口，它会来调用Service的这个接口
 func (s *Service) Snapshot() (raftserver.Snapshot, error) {
 	snapshot := s.raftNode.CreateRaftSnapshot(s.RaftConfig.SnapshotPatchNum)
 	return snapshot, nil
@@ -179,6 +180,7 @@ func (s *Service) LeaderChange(leader uint64, host string) {
 	if leader > 0 {
 		s.raftNode.SetLeaderHost(leader, host)
 		// use for blocking raft start
+		// 用在ratf
 		s.raftStartOnce.Do(func() {
 			close(s.raftStartCh)
 		})

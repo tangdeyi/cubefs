@@ -89,6 +89,7 @@ const (
 	MigrateStateFinishedInAdvance
 )
 
+// 迁移任务：坏盘修复/磁盘下线/数据均衡本质上都chunk级别的迁移任务
 type MigrateTask struct {
 	TaskID   string       `json:"task_id"`   // task id
 	TaskType TaskType     `json:"task_type"` // task type
@@ -96,11 +97,12 @@ type MigrateTask struct {
 
 	SourceIDC    string `json:"source_idc"`     // source idc
 	SourceDiskID DiskID `json:"source_disk_id"` // source disk id
-	SourceVuid   Vuid   `json:"source_vuid"`    // source volume unit id
-
+	// 源卷单元vuid即待迁移的chunk，坏盘场景是待修复的chunk
+	SourceVuid Vuid `json:"source_vuid"` // source volume unit id
+	// 源卷的所有卷单元vuids
 	Sources  []VunitLocation   `json:"sources"`   // source volume units location
 	CodeMode codemode.CodeMode `json:"code_mode"` // codemode
-
+	// 目标卷单元，调用CM的VolumeUnitAlloc接口分配的
 	Destination VunitLocation `json:"destination"` // destination volume unit location
 
 	Ctime string `json:"ctime"` // create time
@@ -108,6 +110,7 @@ type MigrateTask struct {
 
 	FinishAdvanceReason string `json:"finish_advance_reason"`
 	// task migrate chunk direct download first,if fail will recover chunk by ec repair
+	// 控制迁移任务是否直读，坏盘修复场景可以禁用
 	ForbiddenDirectDownload bool `json:"forbidden_direct_download"`
 
 	WorkerRedoCnt uint8 `json:"worker_redo_cnt"` // worker redo task count

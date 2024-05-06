@@ -808,6 +808,7 @@ func (c *clustermgrClient) ListAllMigrateTasksByDiskID(ctx context.Context, task
 
 // ListAllMigrateTasks returns all migrate task
 func (c *clustermgrClient) ListAllMigrateTasks(ctx context.Context, taskType proto.TaskType) (tasks []*proto.MigrateTask, err error) {
+	// prefix：taskType-
 	return c.listAllMigrateTasks(ctx, GenMigrateTaskPrefix(taskType), taskType)
 }
 
@@ -897,7 +898,7 @@ func (c *clustermgrClient) GetMigratingDisk(ctx context.Context, taskType proto.
 func (c *clustermgrClient) ListMigratingDisks(ctx context.Context, taskType proto.TaskType) (disks []*MigratingDiskMeta, err error) {
 	span := trace.SpanFromContextSafe(ctx)
 
-	prefix := genMigratingDiskPrefix(taskType)
+	prefix := genMigratingDiskPrefix(taskType) // prefix：migrating-taskType-
 	marker := defaultListTaskMarker
 	for {
 		args := &cmapi.ListKvOpts{

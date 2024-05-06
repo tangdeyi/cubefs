@@ -83,14 +83,19 @@ func NewDiskRepairMgr(clusterMgrCli client.ClusterMgrAPI, taskSwitch taskswitch.
 func (mgr *DiskRepairMgr) Load() error {
 	span, ctx := trace.StartSpanFromContext(context.Background(), "Load")
 
+	// 请求CM拿到持久化的repairing disk列表（因为磁盘修复相当于就是把其上的chunk迁移到其他disk上，所以叫MigratingDisks）
+	// todo: 这个是何时写入到CM的
 	repairingDisks, err := mgr.clusterMgrCli.ListMigratingDisks(ctx, proto.TaskTypeDiskRepair)
 	if err != nil {
 		return err
 	}
+	// 内存结构：repairing disk列表
 	for _, disk := range repairingDisks {
 		mgr.repairingDisks.add(disk.Disk.DiskID, disk.Disk)
 	}
 
+	// 请求CM拿到持久化的disk repair task
+	// todo：这个是何时写入到CM的
 	tasks, err := mgr.clusterMgrCli.ListAllMigrateTasks(ctx, proto.TaskTypeDiskRepair)
 	if err != nil {
 		span.Errorf("find all tasks failed: err[%+v]", err)

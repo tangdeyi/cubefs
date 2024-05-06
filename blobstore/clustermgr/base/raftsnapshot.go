@@ -34,7 +34,7 @@ type raftSnapshot struct {
 	items      []SnapshotItem
 	dbs        map[string]SnapshotDB
 	applyIndex uint64
-	patchNum   int
+	patchNum   int // 含义？
 
 	lock          sync.RWMutex
 	closeCallback func()

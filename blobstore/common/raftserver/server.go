@@ -68,8 +68,8 @@ type raftServer struct {
 	/*storage负责log entry存储，raft和storage联系很紧密，因此raft提供了storage接口，由用户实现，
 	然后在启动时设置到Config中，storage接口只涉及查询操作，何时持久化和如何持久化由用户决定*/
 	store        *raftStorage
-	idGen        *Generator
-	sm           StateMachine // 上层业务实现log entry的apply状态机
+	idGen        *Generator   // id生成器，notify map依赖这个id
+	sm           StateMachine // 上层业务实现log entry的apply状态机，即CM的Service
 	readNotifier atomic.Value
 	notifiers    sync.Map
 	/*
@@ -510,9 +510,9 @@ func (s *raftServer) raftStart() {
 		case <-s.stopc:
 			return
 		case <-ticker.C:
-			s.n.Tick() // 逻辑时钟递增，选举和心跳超时时间相关
+			s.n.Tick() // 逻辑时钟递增，心跳间隔和选举超时时间都以这个为单位
 		case rd := <-s.n.Ready(): // 处理Ready结构体，包含msgs和Entry
-			if rd.SoftState != nil {
+			if rd.SoftState != nil { // SoftState在节点状态更新时不为空（发生切主/启动时选主）
 				leader := atomic.SwapUint64(&s.lead, rd.SoftState.Lead)
 				if rd.SoftState.Lead != leader {
 					var leaderHost string
@@ -525,6 +525,7 @@ func (s *raftServer) raftStart() {
 			}
 			isLeader := s.IsLeader()
 
+			// readIndex请求后返回此字段，Index返回的是readIndex请求时的CommitIndex，RequestCtx是readIndex请求时的参数rctx
 			if len(rd.ReadStates) != 0 {
 				select {
 				case s.readStateC <- rd.ReadStates[len(rd.ReadStates)-1]:
@@ -647,10 +648,11 @@ func (s *raftServer) run() {
 				}
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			// Step出错，提醒Propose调用方
+			// raft的step方法是基于给定的msg信息去推进状态机
 			if err := s.n.Step(ctx, msg); err != nil {
 				for _, nr := range nrs {
-					nr.notify(err)
+					nr.notify(err) // Step出错，通过notify提醒Propose调用方
+
 				}
 			}
 			cancel()
