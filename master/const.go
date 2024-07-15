@@ -121,7 +121,7 @@ const (
 	enableQuota                = "enableQuota"
 	dpDiscardKey               = "dpDiscard"
 	ignoreDiscardKey           = "ignoreDiscard"
-	TrashIntervalKey           = "trashInterval"
+	intervalKey                = "interval"
 )
 
 const (
