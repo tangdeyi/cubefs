@@ -1506,8 +1506,8 @@ func (v *Volume) readEbs(inode, inodeSize uint64, path string, writer io.Writer,
 	reader := v.getEbsReader(inode)
 	var n int
 	var rest uint64
-	var tmp = buf.ReadBufPool.Get().([]byte)
-	defer buf.ReadBufPool.Put(tmp)
+	var tmp = buf.ClodVolReaderBufPool.Get().([]byte)
+	defer buf.ClodVolReaderBufPool.Put(tmp)
 
 	for {
 		if rest = upper - offset; rest <= 0 {

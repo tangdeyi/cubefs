@@ -15,12 +15,20 @@ const (
 	InvalidLimit         = 0
 )
 
-var ReadBufPool = sync.Pool{
-	New: func() interface{} {
-		b := make([]byte, 32*1024)
-		return b
-	},
-}
+var (
+	ClodVolWriteBufPool = sync.Pool{
+		New: func() interface{} {
+			b := make([]byte, 32*1024)
+			return b
+		},
+	}
+	ClodVolReaderBufPool = sync.Pool{
+		New: func() interface{} {
+			b := make([]byte, 1024*1024)
+			return b
+		},
+	}
+)
 
 var tinyBuffersTotalLimit int64 = 4096
 var NormalBuffersTotalLimit int64
