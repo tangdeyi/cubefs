@@ -293,6 +293,7 @@ func newVolUpdateCmd(client *master.MasterClient) *cobra.Command {
 	var optReplicaNum string
 	var optDeleteLockTime int64
 	var optEnableQuota string
+	var optTrashInterval int64
 	var confirmString = strings.Builder{}
 	var vv *proto.SimpleVolView
 	var cmd = &cobra.Command{
@@ -589,6 +590,17 @@ func newVolUpdateCmd(client *master.MasterClient) *cobra.Command {
 				confirmString.WriteString(fmt.Sprintf("  Vol readonly full : %v\n",
 					formatEnabledDisabled(vv.DpReadOnlyWhenVolFull)))
 			}
+			if optTrashInterval >= 0 {
+				if optTrashInterval != vv.TrashInterval {
+					isChange = true
+					confirmString.WriteString(fmt.Sprintf("  TrashInterval            : %v h -> %v h\n", vv.TrashInterval, optTrashInterval))
+					vv.TrashInterval = optTrashInterval
+				} else {
+					confirmString.WriteString(fmt.Sprintf("  TrashInterval            : %v h\n", vv.TrashInterval))
+				}
+			} else {
+				confirmString.WriteString(fmt.Sprintf("  TrashInterval            : %v h\n", vv.TrashInterval))
+			}
 
 			if err != nil {
 				return
@@ -648,7 +660,7 @@ func newVolUpdateCmd(client *master.MasterClient) *cobra.Command {
 	cmd.Flags().StringVar(&optReplicaNum, CliFlagReplicaNum, "", "Specify data partition replicas number(default 3 for normal volume,1 for low volume)")
 	cmd.Flags().StringVar(&optEnableQuota, CliFlagEnableQuota, "", "Enable quota")
 	cmd.Flags().Int64Var(&optDeleteLockTime, CliFlagDeleteLockTime, -1, "Specify delete lock time[Unit: hour] for volume")
-
+	cmd.Flags().Int64Var(&optTrashInterval, CliFlagTrashInterval, -1, "The retention period for files in trash")
 	return cmd
 
 }

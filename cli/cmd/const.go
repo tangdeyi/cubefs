@@ -115,6 +115,7 @@ const (
 	CliFlagForceInode          = "forceInode"
 	CliFlagEnableQuota         = "enableQuota"
 	CliFlagDeleteLockTime      = "delete-lock-time"
+	CliFlagTrashInterval       = "trashInterval"
 
 	//CliFlagSetDataPartitionCount	= "count" use dp-count instead
 

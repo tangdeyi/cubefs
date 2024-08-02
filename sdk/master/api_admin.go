@@ -303,6 +303,7 @@ func (api *AdminAPI) UpdateVolume(
 	request.addParam("replicaNum", strconv.FormatUint(uint64(vv.DpReplicaNum), 10))
 	request.addParam("enableQuota", strconv.FormatBool(vv.EnableQuota))
 	request.addParam("deleteLockTime", strconv.FormatInt(vv.DeleteLockTime, 10))
+	request.addParam("interval", strconv.FormatInt(vv.TrashInterval, 10))
 
 	if txMask != "" {
 		request.addParam("enableTxMask", txMask)
