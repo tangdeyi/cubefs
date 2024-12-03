@@ -29,7 +29,7 @@ ifneq ($(BRANCHNAME),)
     LDFLAGS+= -X "github.com/cubefs/cubefs/blobstore/util/version.version=$(BRANCHNAME)/$(COMMITID)"
 endif
 
-BUILD=go build -v -gcflags=$(GCFLAGS) -asmflags=$(ASMFLAGS) -ldflags='$(LDFLAGS)' -o $(BINDIR)
+BUILD=go build -v -gcflags=$(GCFLAGS) -asmflags=$(ASMFLAGS) -o $(BINDIR)
 INSTALL=CGO_ENABLED=0 $(BUILD)
 CGOINSTALL=CGO_ENABLED=1 $(BUILD)
 PROJECTMOD=github.com/cubefs/cubefs/blobstore

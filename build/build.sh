@@ -56,7 +56,7 @@ LDFlags="-X 'github.com/cubefs/cubefs/proto.Version=${Version}' \
     -X 'github.com/cubefs/cubefs/proto.BranchName=${BranchName}' \
     -X 'github.com/cubefs/cubefs/proto.BuildTime=${BuildTime}' \
     -X 'github.com/cubefs/cubefs/blobstore/util/version.version=${BranchName}/${CommitID}' \
-    -w -s"
+    "
 
 NPROC=$(nproc 2>/dev/null)
 if [ -e /sys/fs/cgroup/cpu ] ; then
