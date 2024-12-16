@@ -523,7 +523,7 @@ func TestVolumeMgr_applyAllocVolume(t *testing.T) {
 	args := &AllocVolumeCtx{
 		Vids:       []proto.Vid{2, 4, 6, 8},
 		Host:       "127.0.0.1:8080",
-		ExpireTime: time.Now().Add(time.Duration(10 * time.Minute)).UnixNano(),
+		ExpireTime: time.Now().Add(10 * time.Minute).UnixNano(),
 	}
 	_, ctx := trace.StartSpanFromContext(context.Background(), "applyAllocVolume")
 	{
@@ -546,14 +546,15 @@ func TestVolumeMgr_applyAllocVolume(t *testing.T) {
 			_, err := mockVolumeMgr.applyAllocVolume(ctx, vid, args.Host, args.ExpireTime)
 			require.NoError(t, err)
 		}
-		allocVolLenMap = mockVolumeMgr.allocator.StatAllocatable()
-		// all volume has actives ,allocVolLen is 0
-		require.Equal(t, 0, allocVolLenMap[mode])
 
-		// test allocator has 0 volume,
+		// all volumes are active, allocVolLen is 0
+		allocVolLenMap = mockVolumeMgr.allocator.StatAllocatable()
+		require.Equal(t, 0, allocVolLenMap[mode])
 		for _, vid := range args.Vids {
-			_, err := mockVolumeMgr.applyAllocVolume(ctx, vid, args.Host, args.ExpireTime)
+			ret, err := mockVolumeMgr.applyAllocVolume(ctx, vid, args.Host, args.ExpireTime)
 			require.NoError(t, err)
+			// skip active volume when allocation
+			require.Equal(t, 0, len(ret.Units))
 		}
 
 		// test vid not exist

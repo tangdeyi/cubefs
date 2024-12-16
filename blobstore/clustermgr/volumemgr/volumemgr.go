@@ -586,10 +586,10 @@ func (v *VolumeMgr) applyAllocVolume(ctx context.Context, vid proto.Vid, host st
 
 	volume.lock.Lock()
 
-	allocatableScoreThreshold := volume.getScoreThreshold()
-	// when propose data, volume status may change , check to ensure volume can alloc,
-	if !volume.canAlloc(v.AllocatableSize, allocatableScoreThreshold) {
-		span.Warnf("volume can not alloc,volume info is %+v", volume.volInfoBase)
+	// when propose data, volume status may change, check to ensure volume can alloc
+	// NOTE: Don't check volume free size or health again to avoid inconsistent master-slave allocation result
+	if !volume.canInsert() {
+		span.Warnf("volume can not alloc, volume info is %+v", volume.volInfoBase)
 		volume.lock.Unlock()
 		return
 	}
