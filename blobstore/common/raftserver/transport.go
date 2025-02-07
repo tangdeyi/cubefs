@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/gorilla/mux"
 
@@ -71,8 +70,6 @@ func NewTransport(port int, handler handler) Transport {
 	tr.httpSvr = &http.Server{
 		Addr:         fmt.Sprintf(":%d", port),
 		Handler:      router,
-		ReadTimeout:  5 * time.Minute,
-		WriteTimeout: 5 * time.Minute,
 	}
 	tr.pool = sync.Pool{
 		New: func() interface{} {
