@@ -358,6 +358,7 @@ func (mw *MetaWrapper) Close() error {
 	mw.closeOnce.Do(func() {
 		close(mw.closeCh)
 		mw.conns.Close()
+		mw.qc.Close()
 	})
 	return nil
 }
