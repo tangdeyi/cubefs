@@ -74,12 +74,14 @@ func NewStreamer(client *ExtentClient, inode uint64) *Streamer {
 	s.inode = inode
 	s.parentInode = 0
 	s.extents = NewExtentCache(inode)
-	s.request = make(chan interface{}, 64)
+	s.request = make(chan interface{}, reqChSize)
 	s.done = make(chan struct{})
 	s.dirtylist = NewDirtyExtentList()
 	s.isOpen = true
 	s.pendingCache = make(chan bcacheKey, 1)
-	log.LogDebugf("NewStreamer: streamer(%v)", s)
+	if log.EnableDebug() {
+		log.LogDebugf("NewStreamer: streamer(%v), chSize %d", s, reqChSize)
+	}
 	go s.server()
 	go s.asyncBlockCache()
 	return s

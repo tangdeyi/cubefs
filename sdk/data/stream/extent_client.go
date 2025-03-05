@@ -23,6 +23,8 @@ import (
 	"syscall"
 	"time"
 
+	syslog "log"
+
 	"github.com/cubefs/cubefs/proto"
 	"github.com/cubefs/cubefs/sdk/data/manager"
 	"github.com/cubefs/cubefs/sdk/data/wrapper"
@@ -59,6 +61,8 @@ const (
 	kHighWatermarkPct    = 1.01
 	slowStreamerEvictNum = 10
 	fastStreamerEvictNum = 10000
+
+	defaultReqChanSize = 64
 )
 
 var (
@@ -69,6 +73,8 @@ var (
 	releaseRequestPool *sync.Pool
 	truncRequestPool   *sync.Pool
 	evictRequestPool   *sync.Pool
+
+	reqChSize int
 )
 
 func init() {
@@ -91,6 +97,15 @@ func init() {
 	evictRequestPool = &sync.Pool{New: func() interface{} {
 		return &EvictRequest{}
 	}}
+
+	reqChSize = defaultReqChanSize
+}
+
+func SetReqChanSize(size int) {
+	if size > reqChSize {
+		reqChSize = size
+		syslog.Printf("SetReqChanSize %d\n", size)
+	}
 }
 
 type ExtentConfig struct {
@@ -343,7 +358,7 @@ func (client *ExtentClient) OpenStreamWithCache(inode uint64, needBCache bool) e
 	if !s.isOpen && !client.disableMetaCache {
 		s.isOpen = true
 		log.LogDebugf("open stream again, ino(%v)", s.inode)
-		s.request = make(chan interface{}, 64)
+		s.request = make(chan interface{}, reqChSize)
 		s.pendingCache = make(chan bcacheKey, 1)
 		go s.server()
 		go s.asyncBlockCache()
@@ -615,7 +630,7 @@ func (client *ExtentClient) GetStreamer(inode uint64) *Streamer {
 	log.LogDebugf("GetStreamer: streamer(%v)", s)
 	if !s.isOpen {
 		s.isOpen = true
-		s.request = make(chan interface{}, 64)
+		s.request = make(chan interface{}, reqChSize)
 		s.pendingCache = make(chan bcacheKey, 1)
 		go s.server()
 		go s.asyncBlockCache()
