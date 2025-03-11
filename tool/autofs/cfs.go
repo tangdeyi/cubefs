@@ -37,7 +37,6 @@ type cfsOption struct {
 	EnSyncWrite          string `json:"enSyncWrite"`
 	EnableAudit          string `json:"enableAudit"`
 	EnableHTTPS          string `json:"enableHTTPS"`
-	EnableSummary        string `json:"enableSummary"`
 	EnableUnixPermission string `json:"enableUnixPermission"`
 	EnableXattr          string `json:"enableXattr"`
 	FollowerRead         string `json:"followerRead"`

@@ -262,7 +262,6 @@ type client struct {
 	writeBlockThread       int
 	cacheRuleKey           string
 	cacheThreshold         int
-	enableSummary          bool
 	secretKey              string
 	accessKey              string
 	subDir                 string
@@ -618,12 +617,6 @@ func cfs_set_client(id C.int64_t, key, val *C.char) C.int {
 		wt, err := strconv.Atoi(v)
 		if err == nil {
 			c.writeBlockThread = wt
-		}
-	case "enableSummary":
-		if v == "true" {
-			c.enableSummary = true
-		} else {
-			c.enableSummary = false
 		}
 	case "accessKey":
 		c.accessKey = v
@@ -1570,9 +1563,6 @@ func (c *client) start() (err error) {
 		}
 	}
 
-	if c.enableSummary {
-		c.sc = fs.NewSummaryCache(fs.DefaultSummaryExpiration, fs.MaxSummaryCache)
-	}
 	if c.enableBcache {
 		c.bc = bcache.NewBcacheClient()
 	}
@@ -1604,7 +1594,6 @@ func (c *client) start() (err error) {
 		Volume:        c.volName,
 		Masters:       masters,
 		ValidateOwner: false,
-		EnableSummary: c.enableSummary,
 		InnerReq:      c.enableInnerReq,
 	}); err != nil {
 		log.LogErrorf("newClient NewMetaWrapper failed(%v)", err)
