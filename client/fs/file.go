@@ -178,11 +178,11 @@ func (f *File) Forget() {
 		log.LogDebugf("TRACE Forget: ino(%v)", ino)
 	}()
 
-	//TODO:why cannot close fwriter
-	//log.LogErrorf("TRACE Forget: ino(%v)", ino)
-	//if f.fWriter != nil {
+	// TODO:why cannot close fwriter
+	// log.LogErrorf("TRACE Forget: ino(%v)", ino)
+	// if f.fWriter != nil {
 	//	f.fWriter.Close()
-	//}
+	// }
 
 	if DisableMetaCache {
 		f.super.ic.Delete(ino)
@@ -315,10 +315,10 @@ func (f *File) Release(ctx context.Context, req *fuse.ReleaseRequest) (err error
 
 	start := time.Now()
 
-	//log.LogErrorf("TRACE Release close stream: ino(%v) req(%v)", ino, req)
-	//if f.fWriter != nil {
+	// log.LogErrorf("TRACE Release close stream: ino(%v) req(%v)", ino, req)
+	// if f.fWriter != nil {
 	//	f.fWriter.Close()
-	//}
+	// }
 
 	err = f.super.ec.CloseStream(ino)
 	if err != nil {
@@ -383,9 +383,7 @@ func (f *File) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.ReadR
 	if f.info.Size > uint64(req.Offset) && uint64(req.Offset+int64(req.Size)) >= f.info.Size {
 		// at least read bytes: f.info.Size - req.Offset
 		if size > 0 && uint64(size) < f.info.Size-uint64(req.Offset) {
-			log.LogErrorf("Read: error data size, ino(%v) offset(%v) filesize(%v) reqsize(%v) size(%v)\n", f.info.Inode, req.Offset, f.info.Size, req.Size, size)
-			errMetric := exporter.NewCounter("fileReadFailed")
-			errMetric.AddWithLabels(1, map[string]string{exporter.Vol: f.super.volname, exporter.Err: "EIO"})
+			log.LogWarnf("Read: error data size, ino(%v) offset(%v) filesize(%v) reqsize(%v) size(%v)\n", f.info.Inode, req.Offset, f.info.Size, req.Size, size)
 		}
 	}
 
@@ -826,7 +824,7 @@ func (f *File) filterFilesSuffix(filterFiles string) bool {
 	}
 	suffixs := strings.Split(filterFiles, ";")
 	for _, suffix := range suffixs {
-		//.py means one type of file
+		// .py means one type of file
 		suffix = "." + suffix
 		if suffix != "." && strings.Contains(f.name, suffix) {
 			log.LogDebugf("fileName:%s,filter:%s,suffix:%s,suffixs:%v", f.name, filterFiles, suffix, suffixs)
