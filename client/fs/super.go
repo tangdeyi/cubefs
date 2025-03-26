@@ -15,6 +15,7 @@
 package fs
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"net/http"
@@ -39,6 +40,7 @@ import (
 	"github.com/cubefs/cubefs/util/auditlog"
 	"github.com/cubefs/cubefs/util/errors"
 	"github.com/cubefs/cubefs/util/log"
+	"github.com/cubefs/cubefs/util/stat"
 	"github.com/cubefs/cubefs/util/ump"
 )
 
@@ -306,9 +308,11 @@ func NewSuper(opt *proto.MountOptions) (s *Super, err error) {
 		atomic.StoreUint32((*uint32)(&s.state), uint32(fs.FSStatRestore))
 	}
 
-	log.LogInfof("NewSuper: cluster(%v) volname(%v) icacheExpiration(%v) LookupValidDuration(%v) AttrValidDuration(%v) state(%v) cacheDpStorageClass(%v)",
-		s.cluster, s.volname, inodeExpiration, LookupValidDuration, AttrValidDuration, s.state, s.cacheDpStorageClass)
-
+	log.LogInfof("NewSuper: cluster(%v) volname(%v) icacheExpiration(%v) LookupValidDuration(%v) AttrValidDuration(%v) state(%v)",
+		s.cluster, s.volname, inodeExpiration, LookupValidDuration, AttrValidDuration, s.state)
+	stat.PrintModuleStat = func(writer *bufio.Writer) {
+		fmt.Fprintf(writer, "ic:%d dc:%d nodecache:%d dircache:%d", s.ic.lruList.Len(), s.dc.lruList.Len(), len(s.nodeCache), s.mw.DirCacheLen())
+	}
 	go s.loopSyncMeta()
 
 	return s, nil
