@@ -170,9 +170,6 @@ func (d *Dir) Release(ctx context.Context, req *fuse.ReleaseRequest) (err error)
 	d.dcache.Clear()
 	ino := d.info.Inode
 	d.super.ic.Delete(ino)
-	d.super.fslock.Lock()
-	delete(d.super.nodeCache, ino)
-	d.super.fslock.Unlock()
 
 	return nil
 }
