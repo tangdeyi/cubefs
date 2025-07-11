@@ -249,6 +249,7 @@ func NewSuper(opt *proto.MountOptions) (s *Super, err error) {
 		OnGetInodeInfo:      s.InodeGet,
 		BcacheOnlyForNotSSD: opt.BcacheOnlyForNotSSD,
 		NeedRemoteCache:     true,
+		ForceRemoteCache:    opt.ForceRemoteCache,
 	}
 
 	s.ec, err = stream.NewExtentClient(extentConfig)

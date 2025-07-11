@@ -161,7 +161,8 @@ type ExtentConfig struct {
 	OnGetInodeInfo      GetInodeInfoFunc
 	BcacheOnlyForNotSSD bool
 	// remoteCache
-	NeedRemoteCache bool
+	NeedRemoteCache  bool
+	ForceRemoteCache bool
 }
 
 type MultiVerMgr struct {
@@ -213,6 +214,8 @@ type ExtentClient struct {
 	stopOnce     sync.Once
 	stopCh       chan struct{}
 	wg           sync.WaitGroup
+
+	forceRemoteCache bool
 }
 
 func (client *ExtentClient) UidIsLimited(uid uint32) bool {
@@ -345,6 +348,7 @@ retry:
 	client.CacheDpStorageClass = config.VolCacheDpStorageClass
 	client.forbiddenMigration = config.OnForbiddenMigration
 	client.getInodeInfo = config.OnGetInodeInfo
+	client.forceRemoteCache = config.ForceRemoteCache
 
 	if config.StreamRetryTimeout <= 0 || config.StreamRetryTimeout >= 600 {
 		client.streamRetryTimeout = StreamSendMaxTimeout
