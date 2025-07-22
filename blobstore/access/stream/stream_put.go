@@ -322,7 +322,7 @@ func (h *Handler) writeToBlobnodes(ctx context.Context,
 
 				switch code {
 				// EIO and Readonly error, then we need to punish disk in local and no necessary to retry
-				case errcode.CodeDiskBroken, errcode.CodeVUIDReadonly:
+				case errcode.CodeVUIDReadonly:
 					h.punishVolume(ctx, clusterID, vid, host, "BrokenOrRO")
 					h.punishDisk(ctx, clusterID, diskID, host, "BrokenOrRO")
 					span.Warnf("punish disk:%d volume:%d cos:blobnode/%d", diskID, vid, code)
@@ -334,9 +334,10 @@ func (h *Handler) writeToBlobnodes(ctx context.Context,
 					span.Warnf("punish volume:%d cos:blobnode/%d", vid, code)
 					return true, err
 
+				// disk broken may be some chunks have repaired
 				// vuid not found means the reflection between vuid and diskID has change, we should refresh the volume
 				// disk not found means disk has been repaired or offline
-				case errcode.CodeDiskNotFound, errcode.CodeVuidNotFound:
+				case errcode.CodeDiskBroken, errcode.CodeDiskNotFound, errcode.CodeVuidNotFound:
 					latestVolume, e := h.getVolume(ctx, clusterID, vid, false)
 					if e != nil {
 						return true, errors.Base(err, "get volume with no cache failed").Detail(e)
@@ -353,8 +354,12 @@ func (h *Handler) writeToBlobnodes(ctx context.Context,
 						return true, err
 					}
 
-					h.punishVolume(ctx, clusterID, vid, host, "NotFound")
-					h.punishDisk(ctx, clusterID, diskID, host, "NotFound")
+					reason := "NotFound"
+					if code == errcode.CodeDiskBroken {
+						reason = "Broken"
+					}
+					h.punishVolume(ctx, clusterID, vid, host, reason)
+					h.punishDisk(ctx, clusterID, diskID, host, reason)
 					span.Warnf("punish disk:%d volume:%d cos:blobnode/%d", diskID, vid, code)
 					return true, err
 				default:
@@ -363,7 +368,7 @@ func (h *Handler) writeToBlobnodes(ctx context.Context,
 				// in timeout case and writtenNum is not satisfied with putQuorum, then should retry
 				if errorTimeout(err) && atomic.LoadUint32(&writtenNum) < putQuorum {
 					h.punishDiskWith(ctx, clusterID, diskID, host, "Timeout")
-					span.Warn("connect timeout, need to punish threshold disk", diskID, host)
+					span.Warn("timeout need to punish threshold disk", diskID, host)
 					return false, err
 				}
 
